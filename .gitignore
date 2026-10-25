@@ -1,0 +1,7 @@
+# Personal data: never upload
+forward/
+journal-sync.js
+journal-sync.csv
+*.log
+node_modules/
+.env

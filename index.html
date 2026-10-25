@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GoldTerm · XAU/USD</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">◆</span> GoldTerm</div>
+  <div class="sym">
+    <span class="sym-name">XAU/USD</span>
+    <span id="srcBadge" class="badge" title="">connecting…</span>
+    <span id="status" class="status warn"><i></i><b>loading</b></span>
+  </div>
+  <div class="quote">
+    <span id="lastPx" class="last">—</span>
+    <span id="chg" class="chg">—</span>
+  </div>
+  <div class="seg" id="tfs">
+    <button data-tf="1m">1m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button>
+    <button data-tf="1h">1H</button><button data-tf="4h">4H</button><button data-tf="1d">1D</button>
+  </div>
+  <div class="seg" id="inds">
+    <button data-ind="ema20">EMA20</button><button data-ind="ema50">EMA50</button><button data-ind="ema200">EMA200</button>
+    <button data-ind="bb">BB</button><button data-ind="vwap">VWAP</button><button data-ind="rsi">RSI</button>
+  </div>
+  <div class="spacer"></div>
+  <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
+</header>
+
+<main class="layout">
+  <nav class="tools" id="tools">
+    <button data-tool="cursor" title="Cursor"><svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-2 6z"/></svg></button>
+    <button data-tool="hline" title="Horizontal line (click chart)"><svg viewBox="0 0 24 24"><path d="M3 12h18"/><circle cx="12" cy="12" r="2"/></svg></button>
+    <button data-tool="trend" title="Trend line (click two points)"><svg viewBox="0 0 24 24"><path d="M4 19L20 5"/><circle cx="4" cy="19" r="2"/><circle cx="20" cy="5" r="2"/></svg></button>
+    <button data-tool="rect" title="Support/resistance box: click two corners. Finish right of the last candle to keep it extending. Double-click a box to delete it."><svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="8" rx="1"/></svg></button>
+    <button data-action="clear" title="Clear drawings"><svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/></svg></button>
+    <hr>
+    <button data-toggle="sr" title="Auto support / resistance"><svg viewBox="0 0 24 24"><path d="M3 7h18M3 17h18" stroke-dasharray="3 2"/></svg></button>
+    <button data-toggle="alerts" title="Alerts: S/R zones and your horizontal lines (sound + desktop notification)"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg></button>
+    <button data-toggle="marks" title="Show my trades on chart"><svg viewBox="0 0 24 24"><path d="M7 16l5-8 5 8"/></svg></button>
+    <button data-toggle="siglv" title="Show entry / SL / target of strategy signals"><svg viewBox="0 0 24 24"><path d="M4 6h10M4 12h16M4 18h10" stroke-dasharray="3 2"/></svg></button>
+    <button data-action="fit" title="Reset zoom"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+  </nav>
+
+  <section class="charts">
+    <div id="legend" class="legend"></div>
+    <div id="toolHint" class="tool-hint" hidden></div>
+    <div id="mainChart" class="main-chart"></div>
+    <div id="rsiChart" class="rsi-chart"></div>
+  </section>
+
+  <aside class="panel">
+    <div class="tabs" id="tabs">
+      <button data-tab="market">Market</button>
+      <button data-tab="plan">Trade Planner</button>
+      <button data-tab="journal">Journal</button>
+      <button data-tab="analytics">Analytics</button>
+    </div>
+
+    <div class="tab-body" id="tab-market"></div>
+
+    <div class="tab-body" id="tab-plan">
+      <div class="dir-toggle" id="planDir">
+        <button data-dir="long" class="long">Buy / Long</button>
+        <button data-dir="short" class="short">Sell / Short</button>
+      </div>
+      <div class="form-grid">
+        <label>Entry</label>
+        <div class="field"><input id="pEntry" type="number" step="0.01"><button class="mini" data-pick="entry" title="Pick on chart">⌖</button></div>
+        <label></label>
+        <label class="check"><input id="pMarket" type="checkbox"> Track market price</label>
+        <label>Stop loss</label>
+        <div class="field"><input id="pSL" type="number" step="0.01"><button class="mini" data-pick="sl" title="Pick on chart">⌖</button></div>
+        <label>Take profit</label>
+        <div class="field"><input id="pTP" type="number" step="0.01"><button class="mini" data-pick="tp" title="Pick on chart">⌖</button></div>
+        <label>Lots</label>
+        <div class="field"><input id="pLots" type="number" step="0.01" min="0.01"><button class="mini wide" id="sizeBtn" title="Size position to your risk % setting">Size @risk</button></div>
+      </div>
+      <div class="btn-row">
+        <button id="atrBtn" class="ghost">ATR template</button>
+        <button id="suggestBtn" class="ghost">Smart levels</button>
+        <button id="myStyleBtn" class="ghost" title="Your typical stop distance and lot size, learned from your closed trades">My style</button>
+        <button id="clearPlanBtn" class="ghost danger" title="Remove the stop loss and take profit (and their lines on the chart)">Clear levels</button>
+        <button id="logBtn" class="primary">Log trade</button>
+      </div>
+      <div id="planOut"></div>
+    </div>
+
+    <div class="tab-body" id="tab-journal">
+      <div id="openTrades"></div>
+      <details class="card" id="addTradeBox">
+        <summary>＋ Add a trade manually</summary>
+        <form id="addForm" class="form-grid">
+          <label>Side</label>
+          <select name="dir"><option value="long">Long</option><option value="short">Short</option></select>
+          <label>Entry</label><input name="entry" type="number" step="0.01" required>
+          <label>Stop loss</label><input name="sl" type="number" step="0.01">
+          <label>Take profit</label><input name="tp" type="number" step="0.01">
+          <label>Lots</label><input name="lots" type="number" step="0.01" value="0.10" required>
+          <label>Opened</label><input name="openTime" type="datetime-local" required>
+          <label>Exit price</label><input name="exit" type="number" step="0.01" placeholder="blank = still open">
+          <label>Closed</label><input name="closeTime" type="datetime-local">
+          <label>Setup</label>
+          <input name="tag" list="tagList" placeholder="breakout, pullback…">
+          <label>Notes</label><input name="notes">
+          <span></span><button class="primary" type="submit">Save trade</button>
+        </form>
+        <datalist id="tagList"><option>breakout</option><option>pullback</option><option>reversal</option><option>range</option><option>news</option><option>scalp</option></datalist>
+      </details>
+      <div class="btn-row">
+        <label class="ghost file-btn">Import CSV<input id="importFile" type="file" accept=".csv,.txt" hidden></label>
+        <button id="exportBtn" class="ghost">Export CSV</button>
+        <button id="clearBtn" class="ghost danger">Clear all</button>
+      </div>
+      <p class="hint">Import works with MT4/MT5 history exports or any CSV with columns like <code>date, side, entry, sl, tp, exit, lots</code>.</p>
+      <div id="closedTrades"></div>
+    </div>
+
+    <div class="tab-body" id="tab-analytics"></div>
+
+    <footer class="disclaimer">Probabilities are statistical estimates from past price behaviour and your own history — not predictions and not financial advice.</footer>
+  </aside>
+</main>
+
+<dialog id="settingsDlg">
+  <form method="dialog" id="settingsForm">
+    <h3>Settings</h3>
+    <label>Data source
+      <select name="provider">
+        <option value="auto">Auto (spot if a Twelve Data key is set, else Binance)</option>
+        <option value="spot">Spot XAU/USD: Twelve Data candles + live ticks (free key)</option>
+        <option value="bnFut">Binance XAUUSDT perpetual (no key)</option>
+        <option value="bnPaxg">Binance PAXG/USDT (no key)</option>
+      </select>
+    </label>
+    <label>Twelve Data API key <input name="tdKey" type="password" autocomplete="off"><small>Free at twelvedata.com. Gives real spot XAU/USD candle history.</small></label>
+    <label class="check"><input name="spotHours" type="checkbox"> Hide candles when the spot gold market is closed (weekends, daily 17:00 NY break)</label>
+    <label class="check"><input name="spotAlign" type="checkbox"> Align Binance feed to spot XAU/USD (removes the futures premium)</label>
+    <label>Price offset added to feed ($) <input name="offset" type="number" step="0.01"><small>Use to align a proxy feed with your broker's quote.</small></label>
+    <label>Account balance ($) <input name="balance" type="number" step="1"></label>
+    <label>Risk per trade (%) <input name="risk" type="number" step="0.1"></label>
+    <label class="check"><input name="autoClose" type="checkbox"> Auto-close open journal trades when live price hits SL/TP</label>
+    <div class="btn-row"><button value="cancel" class="ghost">Cancel</button><button value="save" class="primary">Save</button></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+<script src="strategies.js"></script>
+<script src="forward/forward.js" onerror="window.FORWARD = null"></script>
+<script src="levels.js"></script>
+<script src="journal-sync.js" onerror="window.PRESET_TRADES = []"></script>
+<script src="app.js"></script>
+</body>
+</html>
