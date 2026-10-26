@@ -43,12 +43,22 @@
     <button data-toggle="alerts" title="Alerts: S/R zones and your horizontal lines (sound + desktop notification)"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg></button>
     <button data-toggle="marks" title="Show my trades on chart"><svg viewBox="0 0 24 24"><path d="M7 16l5-8 5 8"/></svg></button>
     <button data-toggle="siglv" title="Show entry / SL / target of strategy signals"><svg viewBox="0 0 24 24"><path d="M4 6h10M4 12h16M4 18h10" stroke-dasharray="3 2"/></svg></button>
+    <button data-action="replay" title="Bar replay: click a candle to start from it, then step or play forward (Esc exits)"><svg viewBox="0 0 24 24"><path d="M5 5v14"/><path d="M9 5l10 7-10 7z"/></svg></button>
     <button data-action="fit" title="Reset zoom"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
   </nav>
 
   <section class="charts">
     <div id="legend" class="legend"></div>
     <div id="toolHint" class="tool-hint" hidden></div>
+    <div id="replayBar" class="replay-bar" hidden>
+      <b>REPLAY</b><span id="rpTime"></span>
+      <button data-rp="back" title="Step back (Shift+Left)">&#9664;</button>
+      <button data-rp="play" title="Play / pause (Space)">&#9654;</button>
+      <button data-rp="fwd" title="Step forward (Shift+Right)">&#9654;|</button>
+      <select id="rpSpeed" title="Playback speed"><option value="1000">1x</option><option value="400" selected>3x</option><option value="150">10x</option><option value="50">30x</option></select>
+      <button data-rp="pick" title="Choose a new start candle">Jump</button>
+      <button data-rp="exit" title="Back to live (Esc)">Exit</button>
+    </div>
     <div id="mainChart" class="main-chart"></div>
     <div id="rsiChart" class="rsi-chart"></div>
   </section>

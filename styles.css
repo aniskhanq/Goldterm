@@ -69,6 +69,12 @@ button { cursor: pointer; }
 .legend .k { color: var(--muted); }
 .tool-hint { position: absolute; top: 30px; left: 10px; z-index: 3; background: var(--panel-2); border: 1px solid var(--accent); padding: 4px 10px; border-radius: var(--radius); font-size: 12px; }
 
+.replay-bar { position: absolute; top: 30px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 6px; background: var(--panel-2); border: 1px solid var(--gold); border-radius: var(--radius); padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+.replay-bar b { color: var(--gold); }
+.replay-bar span { color: var(--muted); min-width: 120px; }
+.replay-bar button, .replay-bar select { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; }
+.replay-bar button:hover { border-color: var(--gold); }
+
 /* panel */
 .panel { background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 .tabs { display: flex; border-bottom: 1px solid var(--line); flex: none; }
