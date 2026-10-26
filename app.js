@@ -56,7 +56,7 @@ let drawings = store.get('drawings', []);
   for (const d of window.PRESET_DRAWINGS || []) if (!seen.has(d.id)) { drawings.push(d); seen.add(d.id); }
   store.set('presetSeen', [...seen]); store.set('drawings', drawings);
 }
-let candles = [];
+let candles = [], candlesTf = null;
 let calc = null;
 let lastPrice = null;
 const saveUI = () => store.set('ui', ui);
@@ -306,7 +306,7 @@ async function loadFeed() {
       raw = bars;
       if (key !== 'spot') lastRaw = raw[raw.length - 1].close;
       feed.phase = ((raw[raw.length - 1].time % TF[ui.tf].sec) + TF[ui.tf].sec) % TF[ui.tf].sec;
-      candles = raw.map(b => shift(b));
+      candles = raw.map(b => shift(b)); candlesTf = ui.tf;
       renderSourceBadge();
       onHistory();
       feed.stop = SOURCES[key].stream(t => { if (gen === feed.gen) onTick(t); });
@@ -524,10 +524,10 @@ const indSeries = {
 // Draws S/R zones as small filled rectangles from the candle where each zone formed
 // to just past the latest candle.
 class ZonePrimitive {
-  constructor() { this.zones = []; this.view = new ZoneView(this); }
+  constructor() { this.zones = []; this.ghosts = []; this.view = new ZoneView(this); }
   attached({ chart: c, series, requestUpdate }) { this.chart = c; this.series = series; this.requestUpdate = requestUpdate; }
   detached() { this.requestUpdate = null; }
-  set(zones) { this.zones = zones; if (this.requestUpdate) this.requestUpdate(); }
+  set(zones, ghosts = []) { this.zones = zones; this.ghosts = ghosts; if (this.requestUpdate) this.requestUpdate(); }
   updateAllViews() { this.view.update(); }
   paneViews() { return [this.view]; }
 }
@@ -536,16 +536,31 @@ class ZoneView {
   update() {}
   zOrder() { return 'bottom'; }
   renderer() {
-    const { chart: c, series, zones } = this.src;
+    const { chart: c, series, zones, ghosts } = this.src;
     return {
       draw(target) {
-        if (!c || !zones.length) return;
+        if (!c || !(zones.length || ghosts.length) || !candles.length) return;
         const ts = c.timeScale(), right = ts.logicalToCoordinate(candles.length - 1 + 4);
         target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
           ctx.save();
           ctx.font = '600 10px system-ui, Segoe UI, sans-serif';
+          for (const g of ghosts) { // replaced zones: faded, dotted, ending where they were replaced
+            const x1 = ts.logicalToCoordinate(timeToLogical(g.t)), x2 = ts.logicalToCoordinate(timeToLogical(g.to)), y1 = series.priceToCoordinate(g.hi), y2 = series.priceToCoordinate(g.lo);
+            if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+            const res = g.kind === 'R', col = res ? '239,83,80' : '38,166,154';
+            const left = Math.max(0, x1), w = Math.min(mediaSize.width, x2) - left, top = Math.min(y1, y2), h = Math.max(3, Math.abs(y2 - y1));
+            if (w <= 0) continue;
+            ctx.fillStyle = `rgba(${col},0.07)`;
+            ctx.fillRect(left, top, w, h);
+            ctx.strokeStyle = `rgba(${col},0.35)`;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 3]);
+            ctx.strokeRect(Math.round(left) + 0.5, Math.round(top) + 0.5, Math.max(1, Math.round(w) - 1), Math.max(1, Math.round(h) - 1));
+            ctx.fillStyle = `rgba(${col},0.45)`;
+            ctx.fillText(`old ${res ? 'R' : 'S'}`, left + 4, res ? top - 3 : top + h + 11);
+          }
           for (const z of zones) {
-            const x1 = ts.logicalToCoordinate(z.from), y1 = series.priceToCoordinate(z.hi), y2 = series.priceToCoordinate(z.lo);
+            const x1 = ts.logicalToCoordinate(timeToLogical(z.t)), y1 = series.priceToCoordinate(z.hi), y2 = series.priceToCoordinate(z.lo);
             if (x1 == null || right == null || y1 == null || y2 == null) continue;
             const res = z.kind === 'R', col = res ? '239,83,80' : '38,166,154';
             const left = Math.max(0, x1), w = Math.min(mediaSize.width, right) - left, top = Math.min(y1, y2), h = Math.max(3, Math.abs(y2 - y1));
@@ -838,8 +853,42 @@ function marketState() {
   return {
     price: b.close, score: s, bias: biasLabel(s), rsi: r, atr: A, avgAtr, bbw,
     vol: A > avgAtr * 1.2 ? 'Expanding' : A < avgAtr * 0.8 ? 'Contracting' : 'Normal',
-    sr: srZones(candles, calc.atr), sig, session: sessionOf(Date.now()),
+    sr: stableZones(), sig, session: sessionOf(Date.now()),
   };
+}
+// Zones are updated only when a candle closes, from closed candles. A drawn zone keeps its exact position
+// until price closes through it, drifts more than 8 ATR away, or 3 closer zones push it out. It then stays
+// on the chart faded ("old"), ending at the candle where it was replaced (last 12 per timeframe).
+// Stored without the display offset, so a spot-basis or offset change moves them with the candles.
+let srCache = { key: '', sr: null };
+const srDrawn = store.get('srDrawn', {}), srGhosts = store.get('srGhosts', {});
+const zShift = (z, o) => ({ ...z, lo: z.lo + o, hi: z.hi + o, ...(z.price != null && { price: z.price + o }) });
+function stableZones() {
+  const n = candles.length, tf = ui.tf, o = histOffset(), key = `${tf}|${candles[0].time}|${candles[n - 2].time}|${o}`;
+  if (candlesTf !== tf) return { res: [], sup: [], inside: [] }; // timeframe switch still loading
+  if (key === srCache.key) return srCache.sr;
+  const closed = candles.slice(0, -1), last = closed[closed.length - 1], px = last.close, A = calc.atr[n - 2];
+  const raw = srZones(closed, calc.atr.slice(0, -1)), ov = (a, b, t = 0) => a.lo <= b.hi + t && a.hi >= b.lo - t;
+  const prev = (srDrawn[tf] || []).filter(d => d.t >= candles[0].time).map(d => zShift(d, o)), keep = [], gone = [];
+  for (const d of prev) ((d.kind === 'R' ? px > d.hi + 0.1 * A : px < d.lo - 0.1 * A) || Math.abs(px - d.price) > 8 * A ? gone : keep).push(d);
+  for (const z of [...raw.res.map(z => ({ ...z, kind: 'R' })), ...raw.sup.map(z => ({ ...z, kind: 'S' }))])
+    if (!keep.some(d => ov(d, z, 0.3 * A))) keep.push({ lo: z.lo, hi: z.hi, price: z.price, touches: z.touches, flipped: z.flipped, kind: z.kind, t: closed[z.from].time });
+  const drawn = [];
+  for (const s of ['R', 'S']) {
+    const side = keep.filter(z => z.kind === s).sort((x, y) => Math.abs(x.price - px) - Math.abs(y.price - px));
+    drawn.push(...side.slice(0, 3)); gone.push(...side.slice(3).filter(z => prev.includes(z)));
+  }
+  const ghosts = (srGhosts[tf] || []).filter(g => g.to > candles[0].time).map(g => zShift(g, o));
+  for (const z of gone) {
+    const same = ghosts.find(g => g.kind === z.kind && ov(g, z) && g.to >= z.t);
+    if (same) same.to = last.time; else ghosts.push({ kind: z.kind, lo: z.lo, hi: z.hi, t: z.t, to: last.time });
+  }
+  srDrawn[tf] = drawn.map(z => zShift(z, -o)); srGhosts[tf] = ghosts.slice(-12).map(g => zShift(g, -o));
+  store.set('srDrawn', srDrawn); store.set('srGhosts', srGhosts);
+  const inside = drawn.filter(z => z.lo <= px && z.hi >= px);
+  for (const z of raw.inside) if (!inside.length && !drawn.some(d => ov(d, z))) inside.push({ ...z, t: closed[z.from].time });
+  srCache = { key, sr: { res: drawn.filter(z => z.lo > px).sort((x, y) => x.lo - y.lo), sup: drawn.filter(z => z.hi < px).sort((x, y) => y.hi - x.hi), inside } };
+  return srCache.sr;
 }
 
 let mtf = {};
@@ -966,10 +1015,11 @@ function renderSR() {
     ...m.sr.res.map(z => ({ ...z, kind: 'R' })), ...m.sr.sup.map(z => ({ ...z, kind: 'S' })),
     ...m.sr.inside.map(z => ({ ...z, kind: m.price >= z.price ? 'S' : 'R', active: true })),
   ] : [];
-  const key = zs.map(z => `${z.kind}${z.lo.toFixed(2)}${z.hi.toFixed(2)}${z.from}${z.touches}${z.active ? 1 : 0}`).join('|');
+  const ghosts = ui.sr && candlesTf === ui.tf ? (srGhosts[ui.tf] || []).map(g => zShift(g, histOffset())) : [];
+  const key = zs.map(z => `${z.kind}${z.lo.toFixed(2)}${z.hi.toFixed(2)}${z.t}${z.touches}${z.active ? 1 : 0}`).join('|') + '#' + ghosts.map(g => `${g.t}-${g.to}`).join(',');
   if (key === srKey) return;
   srKey = key;
-  zonePrim.set(zs);
+  zonePrim.set(zs, ghosts);
 }
 
 // ---------- drawings & chart clicks ----------

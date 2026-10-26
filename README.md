@@ -19,7 +19,7 @@ To get within cents of your broker's quote (most brokers chart the bid), use **S
 
 ## Features
 - **Chart:** candles and volume, EMA 20/50/200, Bollinger Bands, VWAP, an RSI pane, and timeframes from 1m to 1D. Drawing tools (horizontal line, trend line) and your trades marked on the chart.
-- **Support/resistance zones:** small rectangles, red for resistance and green for support, with a dashed border when a level has flipped role. A zone counts only price behaviour since price last broke through it, so old levels never mix in. Zones price is chopping through are removed, and up to the best 3 per side are recalculated every second as candles form.
+- **Support/resistance zones:** small rectangles, red for resistance and green for support, with a dashed border when a level has flipped role. A zone counts only price behaviour since price last broke through it, so old levels never mix in. Zones update only when a candle closes. Once drawn, a zone keeps its exact position until price closes through it, drifts more than 8 ATR away, or 3 closer zones push it out (up to 3 per side). A replaced zone stays on the chart, faded and dotted with an "old R/S" label, ending at the candle where it was replaced. The last 12 per timeframe are kept, and they persist across page reloads.
 - **Market:** directional bias score (−5…+5), signals, key levels, a multi-timeframe bias table and an auto setup idea.
 - **Trade Planner:** estimates the chance of hitting TP before SL by blending:
   1. a bootstrap Monte Carlo (4,000 paths) over recent bars with the trend removed,
