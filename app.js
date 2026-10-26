@@ -1042,7 +1042,7 @@ function startReplay() {
   setTool('cursor');
   Object.assign(replay, { on: true, all: candles.slice(0, -1), i: candles.length - 2, sr: { drawn: {}, ghosts: {} } });
   replay.atr = computeIndicators(replay.all).atr;
-  $('#replayBar').hidden = false; $('#tools [data-action=replay]').classList.add('on');
+  $('#replayBar').hidden = false; $$('[data-action=replay]').forEach(b => b.classList.add('on'));
   replayPick();
   refreshStrategies();
 }
@@ -1087,7 +1087,7 @@ function exitReplay() {
   if (!replay.on) return;
   replayPause();
   Object.assign(replay, { on: false, picking: false, sr: null, all: [], atr: [] });
-  $('#replayBar').hidden = true; $('#toolHint').hidden = true; $('#tools [data-action=replay]').classList.remove('on');
+  $('#replayBar').hidden = true; $('#toolHint').hidden = true; $$('[data-action=replay]').forEach(b => b.classList.remove('on'));
   srCache = { key: '', sr: null };
   rebuildDisplay();
   chart.timeScale().scrollToRealTime();
@@ -1856,7 +1856,7 @@ $$('#tools [data-toggle]').forEach(b => b.onclick = () => {
   } saveUI(); applyVisibility(); renderSR(); renderMarkers(); renderPlanLines(ui.tab === 'plan' && !planInvalid());
 });
 $('#tools [data-action=clear]').onclick = () => { if (drawings.length && confirm('Remove all drawings?')) { drawings = []; store.set('drawings', drawings); renderDrawings(); } };
-$('#tools [data-action=replay]').onclick = () => replay.on ? exitReplay() : startReplay();
+$$('[data-action=replay]').forEach(b => b.onclick = () => replay.on ? exitReplay() : startReplay());
 $$('#replayBar [data-rp]').forEach(b => b.onclick = () => ({ back: () => replayStep(-1), fwd: () => replayStep(1), play: replayToggle, pick: replayPick, exit: exitReplay })[b.dataset.rp]());
 $('#rpSpeed').onchange = () => { if (replay.timer) { replayPause(); replayToggle(); } };
 $('#tools [data-action=fit]').onclick = () => chart.timeScale().setVisibleLogicalRange({ from: candles.length - 150, to: candles.length + 8 });

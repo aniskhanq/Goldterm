@@ -70,7 +70,12 @@ button { cursor: pointer; }
 .tool-hint { position: absolute; top: 30px; left: 10px; z-index: 3; background: var(--panel-2); border: 1px solid var(--accent); padding: 4px 10px; border-radius: var(--radius); font-size: 12px; }
 
 .replay-bar { position: absolute; top: 30px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 6px; background: var(--panel-2); border: 1px solid var(--gold); border-radius: var(--radius); padding: 4px 8px; font-size: 12px; white-space: nowrap; }
+.replay-bar[hidden] { display: none; }
 .replay-bar b { color: var(--gold); }
+.replay-bar select { min-width: 54px; }
+.replay-btn { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 5px 10px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.replay-btn:hover { color: var(--text); border-color: var(--gold); }
+.replay-btn.on { color: var(--gold); border-color: var(--gold); }
 .replay-bar span { color: var(--muted); min-width: 120px; }
 .replay-bar button, .replay-bar select { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px 8px; }
 .replay-bar button:hover { border-color: var(--gold); }
