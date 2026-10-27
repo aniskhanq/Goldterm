@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GoldTerm · XAU/USD</title>
-<link rel="stylesheet" href="styles.css?v=20261027b">
+<link rel="stylesheet" href="styles.css?v=20261027c">
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -102,6 +102,7 @@
     </div>
 
     <div class="tab-body" id="tab-journal">
+      <div id="todaySignals"></div>
       <div id="openTrades"></div>
       <details class="card" id="addTradeBox">
         <summary>＋ Add a trade manually</summary>
@@ -160,10 +161,10 @@
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
-<script src="strategies.js?v=20261027b"></script>
+<script src="strategies.js?v=20261027c"></script>
 <script src="forward/forward.js" onerror="window.FORWARD = null"></script>
-<script src="levels.js?v=20261027b"></script>
+<script src="levels.js?v=20261027c"></script>
 <script src="journal-sync.js" onerror="window.PRESET_TRADES = []"></script>
-<script src="app.js?v=20261027b"></script>
+<script src="app.js?v=20261027c"></script>
 </body>
 </html>

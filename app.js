@@ -930,18 +930,18 @@ async function refreshStrategies() {
     }
     for (const s of res.signals) settleSignal(s, s.tf === 300 ? bars5 : bars);
     Object.assign(strat, res, { at: Date.now() });
-    renderMarkers(); renderMarket();
+    renderMarkers(); renderMarket(); renderTodaySignals();
   } catch { /* keep the last result */ }
 }
 setInterval(refreshStrategies, 60000);
 // outcome of a signal on its own candles, same rules as tools/forward-test.mjs (stop checked first, time exit after s.hold or 48h)
 function settleSignal(s, bars) {
-  s.exitTime = null; s.result = null;
+  s.exitTime = null; s.result = null; s.exit = null;
   const hold = s.hold || 48 * 3600;
   for (const b of bars) {
     if (b.time < s.entryTime || b === bars[bars.length - 1]) continue; // the forming candle can't settle a trade yet
     const hs = s.dir > 0 ? b.low <= s.stop : b.high >= s.stop, ht = s.dir > 0 ? b.high >= s.tp : b.low <= s.tp;
-    if (hs || ht || b.time - s.entryTime >= hold) { s.exitTime = b.time; s.result = hs ? 'STOP' : ht ? 'TARGET' : 'TIME'; return; }
+    if (hs || ht || b.time - s.entryTime >= hold) { s.exitTime = b.time; s.result = hs ? 'STOP' : ht ? 'TARGET' : 'TIME'; s.exit = hs ? s.stop : ht ? s.tp : b.close; return; }
   }
 }
 function strategyPanel() {
@@ -1580,6 +1580,37 @@ function renderOpenTrades() {
     </div>`;
   }).join('') : '<div class="empty">No open trades. Log one from the Trade Planner or add it below.</div>');
   renderPlanLines(ui.tab === 'plan' && !planInvalid());
+  renderTodaySignals();
+}
+// Today's strategy signals (local day) as paper trades: entry, exit and P&L, sized like "Size @risk"
+// (balance × risk % from Settings). Open ones are marked to the live price, capped at their stop and target.
+function renderTodaySignals() {
+  const el = $('#todaySignals');
+  if (!el) return;
+  const midnight = new Date().setHours(0, 0, 0, 0) / 1000, px = livePrice();
+  const label = s => s === 'ORB' ? 'London breakout' : s === 'SWP' ? '5m liquidity sweep' : s === 'CMP' ? '5m compression' : 'S/R + candle';
+  const hm = t => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const rows = strat.signals.filter(s => s.time + (s.tf || 900) >= midnight).map(s => {
+    const risk = Math.abs(s.entry - s.stop), lots = Math.max(0.01, Math.floor(settings.balance * settings.risk / 100 / (risk * OZ) * 100) / 100);
+    const lo = Math.min(s.stop, s.tp), hi = Math.max(s.stop, s.tp);
+    const exit = s.exit ?? (px != null ? Math.min(hi, Math.max(lo, px)) : null);
+    const R = exit != null && risk ? s.dir * (exit - s.entry) / risk : null;
+    return { s, lots, exit, R, pnl: exit != null ? s.dir * (exit - s.entry) * lots * OZ : null, open: !s.exitTime };
+  }).reverse();
+  const done = rows.filter(r => !r.open), sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
+  const why = { STOP: 'stop loss hit', TARGET: 'target hit', TIME: 'time exit' };
+  el.innerHTML = `<h4>Today's trade suggestions (${rows.length})</h4>` + (rows.length ? `
+    <div class="meta" style="margin:-2px 0 8px">${done.filter(r => r.R > 0).length} won · ${done.filter(r => r.R <= 0).length} lost · ${rows.length - done.length} open ·
+      <b class="${sgn(sum('R'))}">${sum('R') >= 0 ? '+' : ''}${sum('R').toFixed(2)}R</b> · <b class="${sgn(sum('pnl'))}">${usd(sum('pnl'))}</b></div>` +
+    rows.map(({ s, lots, exit, R, pnl, open }) => `<div class="trade ${s.dir > 0 ? 'long' : 'short'}" title="${esc(s.note || '')}">
+      <div class="row"><b>${s.dir > 0 ? 'BUY' : 'SELL'} · ${label(s.strategy)} <span class="muted" style="font-weight:400">${hm(s.time + (s.tf || 900))}</span></b>
+        <span class="pnl ${sgn(pnl)}">${usd(pnl)}</span></div>
+      <div class="row meta"><span>Entry ${fmt(s.entry)} · SL ${fmt(s.stop)} · TP ${fmt(s.tp)}</span><span>${lots} lots</span></div>
+      <div class="row meta"><span>${open ? `Open · now ${fmt(exit)}` : `Exit ${fmt(exit)} at ${hm(s.exitTime + (s.tf || 900))} · ${why[s.result]}`}</span>
+        <span class="${sgn(R)}">${R != null ? (R >= 0 ? '+' : '') + R.toFixed(2) + 'R' : ''}</span></div>
+    </div>`).join('') +
+    `<p class="hint">Paper results of the strategy signals, sized at ${settings.risk}% of ${usd(settings.balance)} (Settings). Spread and commission not included.</p>`
+    : '<div class="empty">No strategy signals yet today.</div>');
 }
 const planInvalid = () => !(ok(plan.entry) && ok(plan.sl) && ok(plan.tp)) || (plan.dir === 'long' ? !(plan.sl < plan.entry && plan.tp > plan.entry) : !(plan.sl > plan.entry && plan.tp < plan.entry));
 function renderJournal() {
