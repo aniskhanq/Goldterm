@@ -17,6 +17,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('goldterm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('goldterm.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
+const BUILD = '20261027d';
 const OZ = 100; // 1 standard lot of XAU/USD = 100 troy oz
 const TF = {
   '1m': { bn: '1m', td: '1min', sec: 60 }, '5m': { bn: '5m', td: '5min', sec: 300 },
@@ -922,16 +923,19 @@ async function refreshStrategies() {
     const off = (+settings.offset || 0) + (spotMode || settings.spotAlign ? basis : 0);
     const bars = (await src.history('15m', 4500)).map(b => shift(b, off)); // long history so the 1H EMA 200 has settled
     const from = replay.on ? replay.all[0].time : Math.floor(Date.now() / 1000) - 7 * 86400, res = GoldStrategies.analyze(bars, { fromTime: from });
-    let bars5 = [];
+    let bars5 = [], err = null;
     if (GoldStrategies.analyze5) {
-      bars5 = (await src.history('5m', 14000)).map(b => shift(b, off)); // ~9.5k after the spot-hours filter; analyze5 needs 7k
-      const r5 = GoldStrategies.analyze5(bars5, { fromTime: from });
-      res.signals = res.signals.concat(r5.signals).sort((a, b) => a.time - b.time); res.watches = res.watches.concat(r5.watches);
+      try {
+        bars5 = (await src.history('5m', 14000)).map(b => shift(b, off)); // ~9.5k after the spot-hours filter; analyze5 needs 7k
+        const r5 = GoldStrategies.analyze5(bars5, { fromTime: from });
+        res.signals = res.signals.concat(r5.signals).sort((a, b) => a.time - b.time); res.watches = res.watches.concat(r5.watches);
+      } catch (e) { err = '5m signals: ' + e.message; } // keep the 15m ones
     }
     for (const s of res.signals) settleSignal(s, s.tf === 300 ? bars5 : bars);
-    Object.assign(strat, res, { at: Date.now() });
-    renderMarkers(); renderMarket(); renderTodaySignals();
-  } catch { /* keep the last result */ }
+    Object.assign(strat, res, { at: Date.now(), err });
+  } catch (e) { strat.err = e.message; } // keep the last result
+  renderMarkers(); renderMarket(); renderTodaySignals();
+  if (strat.err) setTimeout(refreshStrategies, 15000);
 }
 setInterval(refreshStrategies, 60000);
 // outcome of a signal on its own candles, same rules as tools/forward-test.mjs (stop checked first, time exit after s.hold or 48h)
@@ -1166,6 +1170,7 @@ function setTool(t, hint) {
 }
 chart.subscribeClick(p => {
   if (replay.picking && p.point) { const lg = p.logical ?? (p.time ? timeToLogical(p.time) : null); if (lg != null) replayGoto(Math.round(lg)); return; }
+  if (p.point && tool === 'cursor' && matchMedia('(pointer: coarse)').matches) return deleteLineNear(p.point.y, 14); // phones: tap a line
   if (!p.point || tool === 'cursor') return;
   const price = candleSeries.coordinateToPrice(p.point.y);
   if (price == null) return;
@@ -1176,7 +1181,10 @@ chart.subscribeClick(p => {
     syncPlanInputs(); runPlan(); setTool('cursor');
     return;
   }
-  if (tool === 'hline') { drawings.push({ type: 'h', price: r2(price) }); }
+  if (tool === 'hline') {
+    drawings.push({ type: 'h', price: r2(price) });
+    toast(`Line at ${fmt(r2(price))} added. ${matchMedia('(pointer: coarse)').matches ? 'Tap' : 'Double-click'} it to delete.`);
+  }
   else if (tool === 'trend') {
     if (!p.time) return;
     if (!trendStart) { trendStart = { time: p.time, price }; $('#toolHint').textContent = 'Click the second point'; return; }
@@ -1214,9 +1222,18 @@ chart.subscribeCrosshairMove(p => {
   const price = candleSeries.coordinateToPrice(p.point.y);
   if (price != null) boxPrim.setDraft({ l1: rectStart.lg, l2: p.logical, lo: Math.min(price, rectStart.price), hi: Math.max(price, rectStart.price) });
 });
-// double-click a box to delete it
+// a horizontal line within tol pixels of y: confirm, then delete it
+function deleteLineNear(y, tol) {
+  const hit = drawings.filter(d => d.type === 'h').map(d => ({ d, dy: Math.abs(candleSeries.priceToCoordinate(d.price) - y) }))
+    .filter(x => x.dy <= tol).sort((a, b) => a.dy - b.dy)[0];
+  if (!hit) return false;
+  if (confirm(`Delete horizontal line at ${fmt(hit.d.price)}?`)) { drawings = drawings.filter(d => d !== hit.d); store.set('drawings', drawings); renderDrawings(); }
+  return true;
+}
+// double-click a horizontal line or a box to delete it
 chart.subscribeDblClick(p => {
-  if (tool !== 'cursor' || !p.point || p.logical == null) return;
+  if (tool !== 'cursor' || !p.point) return;
+  if (deleteLineNear(p.point.y, 8) || p.logical == null) return;
   const price = candleSeries.coordinateToPrice(p.point.y);
   const hit = drawings.filter(d => d.type === 'r').reverse().find(d => price >= d.lo && price <= d.hi &&
     p.logical >= timeToLogical(d.t1) - 0.5 && (d.extend || p.logical <= timeToLogical(d.t2) + 0.5));
@@ -1587,6 +1604,8 @@ function renderOpenTrades() {
 function renderTodaySignals() {
   const el = $('#todaySignals');
   if (!el) return;
+  const status = strat.err ? `<div class="note warn">Couldn't load ${strat.at ? 'all ' : ''}strategy signals: ${esc(strat.err)}. Retrying…</div>` : '';
+  if (!strat.at) { el.innerHTML = `<h4>Today's trade suggestions</h4>${status || '<div class="empty">Loading strategy signals…</div>'}`; return; }
   const midnight = new Date().setHours(0, 0, 0, 0) / 1000, px = livePrice();
   const label = s => s === 'ORB' ? 'London breakout' : s === 'SWP' ? '5m liquidity sweep' : s === 'CMP' ? '5m compression' : 'S/R + candle';
   const hm = t => new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1599,7 +1618,7 @@ function renderTodaySignals() {
   }).reverse();
   const done = rows.filter(r => !r.open), sum = k => rows.reduce((a, r) => a + (r[k] || 0), 0);
   const why = { STOP: 'stop loss hit', TARGET: 'target hit', TIME: 'time exit' };
-  el.innerHTML = `<h4>Today's trade suggestions (${rows.length})</h4>` + (rows.length ? `
+  el.innerHTML = `<h4>Today's trade suggestions (${rows.length}) <span class="muted">· updated ${new Date(strat.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span></h4>${status}` + (rows.length ? `
     <div class="meta" style="margin:-2px 0 8px">${done.filter(r => r.R > 0).length} won · ${done.filter(r => r.R <= 0).length} lost · ${rows.length - done.length} open ·
       <b class="${sgn(sum('R'))}">${sum('R') >= 0 ? '+' : ''}${sum('R').toFixed(2)}R</b> · <b class="${sgn(sum('pnl'))}">${usd(sum('pnl'))}</b></div>` +
     rows.map(({ s, lots, exit, R, pnl, open }) => `<div class="trade ${s.dir > 0 ? 'long' : 'short'}" title="${esc(s.note || '')}">
@@ -1609,8 +1628,8 @@ function renderTodaySignals() {
       <div class="row meta"><span>${open ? `Open · now ${fmt(exit)}` : `Exit ${fmt(exit)} at ${hm(s.exitTime + (s.tf || 900))} · ${why[s.result]}`}</span>
         <span class="${sgn(R)}">${R != null ? (R >= 0 ? '+' : '') + R.toFixed(2) + 'R' : ''}</span></div>
     </div>`).join('') +
-    `<p class="hint">Paper results of the strategy signals, sized at ${settings.risk}% of ${usd(settings.balance)} (Settings). Spread and commission not included.</p>`
-    : '<div class="empty">No strategy signals yet today.</div>');
+    `<p class="hint">Paper results of the strategy signals, sized at ${settings.risk}% of ${usd(settings.balance)} (Settings). Spread and commission not included. Build ${BUILD}.</p>`
+    : `<div class="empty">No strategy signals yet today.</div><p class="hint">Build ${BUILD}.</p>`);
 }
 const planInvalid = () => !(ok(plan.entry) && ok(plan.sl) && ok(plan.tp)) || (plan.dir === 'long' ? !(plan.sl < plan.entry && plan.tp > plan.entry) : !(plan.sl > plan.entry && plan.tp < plan.entry));
 function renderJournal() {
