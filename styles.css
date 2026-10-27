@@ -31,6 +31,7 @@ button { cursor: pointer; }
   display: flex; align-items: center; gap: 14px; padding: 0 12px; height: 46px; flex: none;
   background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; white-space: nowrap;
 }
+.topbar > * { flex-shrink: 0; } /* a squeezed .seg (overflow hidden) would clip its buttons away */
 .brand { font-weight: 700; letter-spacing: .3px; }
 .logo { color: var(--gold); }
 .sym { display: flex; align-items: center; gap: 8px; }
@@ -190,4 +191,19 @@ dialog small { display: block; margin-top: 3px; }
   .layout { grid-template-rows: auto 60vh auto; }
   .panel { border-left: 0; border-top: 1px solid var(--line); }
   .tab-body { max-height: none; }
+  /* top bar wraps: price on the first row, timeframes full width below, indicators scroll sideways */
+  .topbar { height: auto; flex-wrap: wrap; gap: 6px 10px; padding: 6px 10px; overflow: visible; }
+  #tfs { order: 10; flex: 1 1 100%; }
+  #tfs button { flex: 1; padding: 9px 0; font-size: 13px; }
+  #inds { order: 11; flex: 1 1 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  #inds button { padding: 8px 9px; }
+  .replay-btn { order: 12; padding: 8px 10px; }
+  #settingsBtn { order: 13; }
+  .topbar .spacer { display: none; }
+  .layout { grid-template-columns: minmax(0, 1fr); } /* never wider than the screen */
+  .tools { flex-wrap: wrap; }
+}
+@media (max-width: 600px) {
+  .brand, #srcBadge { display: none; }
+  .quote .last { font-size: 18px; }
 }
