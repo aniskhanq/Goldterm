@@ -188,7 +188,7 @@ dialog small { display: block; margin-top: 3px; }
   .layout { grid-template-columns: 1fr; grid-template-rows: 62vh auto; }
   .tools { flex-direction: row; justify-content: center; border-right: 0; border-bottom: 1px solid var(--line); padding: 4px; order: -1; }
   .tools hr { width: 1px; height: 20px; border-top: 0; border-left: 1px solid var(--line); margin: 0 4px; }
-  .layout { grid-template-rows: auto 60vh auto; }
+  .layout { grid-template-rows: auto max(60vh, 340px) auto; } /* landscape phones: chart keeps a usable height, page scrolls */
   .panel { border-left: 0; border-top: 1px solid var(--line); }
   .tab-body { max-height: none; }
   /* top bar wraps: price on the first row, timeframes full width below, indicators scroll sideways */
