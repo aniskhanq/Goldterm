@@ -17,7 +17,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('goldterm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('goldterm.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
-const BUILD = '20261027d';
+const BUILD = '20261027e';
 const OZ = 100; // 1 standard lot of XAU/USD = 100 troy oz
 const TF = {
   '1m': { bn: '1m', td: '1min', sec: 60 }, '5m': { bn: '5m', td: '5min', sec: 300 },
@@ -1023,7 +1023,7 @@ function renderSR() {
     ...m.sr.res.map(z => ({ ...z, kind: 'R' })), ...m.sr.sup.map(z => ({ ...z, kind: 'S' })),
     ...m.sr.inside.map(z => ({ ...z, kind: m.price >= z.price ? 'S' : 'R', active: true })),
   ] : [];
-  const ghosts = ui.sr && candlesTf === ui.tf ? ((replay.on ? replay.sr.ghosts : srGhosts)[ui.tf] || []).map(g => zShift(g, zoneOffset())) : [];
+  const ghosts = []; // replaced zones are no longer drawn, to keep the chart clean
   const key = zs.map(z => `${z.kind}${z.lo.toFixed(2)}${z.hi.toFixed(2)}${z.t}${z.touches}${z.active ? 1 : 0}`).join('|') + '#' + ghosts.map(g => `${g.t}-${g.to}`).join(',');
   if (key === srKey) return;
   srKey = key;
