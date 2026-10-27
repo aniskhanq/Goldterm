@@ -699,7 +699,7 @@ function onTick({ price, qty, ms }) {
   onLiveBar(shift(last));
 }
 function onLiveBar(b) {
-  if (replay.on) return; // ticks keep updating raw; the live chart comes back on exit
+  if (replay.on) { checkAutoClose(b.close); return; } // ticks keep updating raw; the live chart comes back on exit
   const last = candles[candles.length - 1];
   if (last && b.time < last.time) return;
   if (last && b.time === last.time) candles[candles.length - 1] = b; else candles.push(b);
@@ -854,7 +854,7 @@ function marketState() {
   return {
     price: b.close, score: s, bias: biasLabel(s), rsi: r, atr: A, avgAtr, bbw,
     vol: A > avgAtr * 1.2 ? 'Expanding' : A < avgAtr * 0.8 ? 'Contracting' : 'Normal',
-    sr: stableZones(), sig, session: sessionOf(Date.now()),
+    sr: stableZones(), sig, session: sessionOf(replay.on ? b.time * 1000 : Date.now()),
   };
 }
 // Zones are updated only when a candle closes, from closed candles. A drawn zone keeps its exact position
@@ -863,13 +863,15 @@ function marketState() {
 // Stored without the display offset, so a spot-basis or offset change moves them with the candles.
 let srCache = { key: '', sr: null };
 const srDrawn = store.get('srDrawn', {}), srGhosts = store.get('srGhosts', {});
+const zoneOffset = () => replay.on ? replay.o : histOffset();
 const zShift = (z, o) => ({ ...z, lo: z.lo + o, hi: z.hi + o, ...(z.price != null && { price: z.price + o }) });
 function stableZones() {
-  const n = candles.length, tf = ui.tf, o = histOffset(), key = `${tf}|${candles[0].time}|${candles[n - 2].time}|${o}`;
-  if (candlesTf !== tf) return { res: [], sup: [], inside: [] }; // timeframe switch still loading
+  if (candlesTf !== ui.tf) return { res: [], sup: [], inside: [] }; // timeframe switch still loading
+  const closed = replay.on ? candles : candles.slice(0, -1), m = closed.length - 1; // in replay every shown candle has closed
+  const tf = ui.tf, o = zoneOffset(), key = `${tf}|${candles[0].time}|${closed[m].time}|${o}`;
   if (key === srCache.key) return srCache.sr;
-  const closed = candles.slice(0, -1), last = closed[closed.length - 1], px = last.close, A = calc.atr[n - 2];
-  const raw = srZones(closed, calc.atr.slice(0, -1)), ov = (a, b, t = 0) => a.lo <= b.hi + t && a.hi >= b.lo - t;
+  const last = closed[m], px = last.close, A = calc.atr[m];
+  const raw = srZones(closed, calc.atr.slice(0, m + 1)), ov = (a, b, t = 0) => a.lo <= b.hi + t && a.hi >= b.lo - t;
   const st = replay.on ? replay.sr : { drawn: srDrawn, ghosts: srGhosts };
   const prev = (st.drawn[tf] || []).filter(d => d.t >= candles[0].time).map(d => zShift(d, o)), keep = [], gone = [];
   for (const d of prev) ((d.kind === 'R' ? px > d.hi + 0.1 * A : px < d.lo - 0.1 * A) || Math.abs(px - d.price) > 8 * A ? gone : keep).push(d);
@@ -947,12 +949,12 @@ function strategyPanel() {
   const recent = visibleSignals().slice(-5).reverse(), watches = replay.on ? [] : strat.watches;
   const fw = window.FORWARD && window.FORWARD.stats;
   const fwRow = (k, v) => v ? `<tr><td>${label(k)}</td><td class="r">${v.closed}</td><td class="r">${v.wins}</td><td class="r ${sgn(v.totalR)}">${v.totalR >= 0 ? '+' : ''}${v.totalR.toFixed(2)}R</td><td class="r ${sgn(v.ret)}">${pct(v.ret, 1)}</td><td class="r">${pct(v.maxDD, 1)}</td></tr>` : '';
-  return `<h4>Strategy signals (15m + 5m) ${strat.at ? `<span class="muted">· updated ${new Date(strat.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>` : ''}</h4>
+  return `<h4>Strategy signals (15m + 5m) ${strat.at && !replay.on ? `<span class="muted">· updated ${new Date(strat.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>` : ''}</h4>
     ${watches.map(w => `<div class="note warn">⚠️ ${esc(w.text)}</div>`).join('')}
     ${recent.length ? `<table><tr><th>Signal</th><th class="r">Entry</th><th class="r">Stop</th><th class="r">Target</th><th></th></tr>
       ${recent.map(s => `<tr title="${esc(s.note)}"><td class="${s.dir > 0 ? 'up' : 'down'}">${s.dir > 0 ? 'BUY' : 'SELL'} · ${label(s.strategy)}<br><span class="muted">${new Date(s.time * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></td>
         <td class="r">${fmt(s.entry)}</td><td class="r">${fmt(s.stop)}</td><td class="r">${fmt(s.tp)}</td><td><button class="mini" data-sig="${strat.signals.findIndex(x => x.time === s.time && x.strategy === s.strategy && x.dir === s.dir)}" title="Open in planner">↗</button></td></tr>`).join('')}</table>`
-      : '<p class="hint">No signals in the last 7 days.</p>'}
+      : `<p class="hint">${replay.on ? 'No signals yet at this point of the replay.' : 'No signals in the last 7 days.'}</p>`}
     ${fw ? `<h4>Forward test (paper, ${settings.risk || 2}% risk) <span class="muted">· since ${new Date(window.FORWARD.since).toLocaleDateString()}</span></h4>
       <table><tr><th></th><th class="r">Closed</th><th class="r">Wins</th><th class="r">Total</th><th class="r">Return</th><th class="r">Max DD</th></tr>${fwRow('ORB', fw.ORB)}${fwRow('SRC', fw.SRC)}${fwRow('SWP', fw.SWP)}${fwRow('CMP', fw.CMP)}</table>
       <p class="hint">Run by tools/forward-test.mjs; refresh the page to update.</p>` : ''}`;
@@ -962,9 +964,9 @@ function renderMarket() {
   if (!calc || !calc.market) return;
   const m = calc.market, sc = m.score ?? 0;
   const lvl = (l, kind) => `<tr><td class="${kind === 'R' ? 'down' : 'up'}">${kind}${l.flipped ? ' ↺' : ''}</td><td class="r">${fmt(l.lo)} – ${fmt(l.hi)}</td><td class="r muted">${((kind === 'R' ? l.lo - m.price : m.price - l.hi) / m.atr).toFixed(1)} ATR</td><td class="r muted">${l.touches}×</td></tr>`;
-  const mtfRows = Object.entries(mtf).map(([tf, v]) => `<tr><td>${tf.toUpperCase()}</td><td class="${v.score >= 2 ? 'up' : v.score <= -2 ? 'down' : ''}">${biasLabel(v.score)}</td><td class="r">${v.score ?? '—'}</td><td class="r">${fmt(v.rsi, 0)}</td></tr>`).join('');
+  const mtfRows = Object.entries(replay.on ? replayMTF() : mtf).map(([tf, v]) => `<tr><td>${tf.toUpperCase()}</td><td class="${v.score >= 2 ? 'up' : v.score <= -2 ? 'down' : ''}">${biasLabel(v.score)}</td><td class="r">${v.score ?? '—'}</td><td class="r">${fmt(v.rsi, 0)}</td></tr>`).join('');
   const idea = marketIdea(m);
-  const recent = alertLog.filter(a => Date.now() - a.t < 6 * 3600e3).slice(0, 5);
+  const recent = replay.on ? [] : alertLog.filter(a => Date.now() - a.t < 6 * 3600e3).slice(0, 5);
   $('#tab-market').innerHTML = `
     ${recent.length ? `<h4>Recent alerts</h4>${recent.map(a => `<div class="note warn"><span class="muted">${new Date(a.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> ${esc(a.text)}</div>`).join('')}` : ''}
     <div class="bias ${m.bias}">
@@ -996,7 +998,7 @@ function renderMarket() {
   if (ib) ib.onclick = () => { clearTemplate(); Object.assign(plan, idea.plan, { market: true }); syncPlanInputs(); setTab('plan'); runPlan(); };
 }
 function marketIdea(m) {
-  const aligned = Object.values(mtf).filter(v => v.score != null);
+  const aligned = Object.values(replay.on ? replayMTF() : mtf).filter(v => v.score != null);
   const htfAgree = aligned.length ? aligned.filter(v => Math.sign(v.score) === Math.sign(m.score)).length : null;
   if (m.bias === 'Neutral') return { html: `<p style="margin:0">No directional edge on ${ui.tf.toUpperCase()} — conditions look range-bound. Waiting for a break of ${m.sr.res[0] ? fmt(m.sr.res[0].price) : 'resistance'} or ${m.sr.sup[0] ? fmt(m.sr.sup[0].price) : 'support'} is usually better than forcing a trade.</p>` };
   const dir = m.bias === 'Bullish' ? 'long' : 'short';
@@ -1017,7 +1019,7 @@ function renderSR() {
     ...m.sr.res.map(z => ({ ...z, kind: 'R' })), ...m.sr.sup.map(z => ({ ...z, kind: 'S' })),
     ...m.sr.inside.map(z => ({ ...z, kind: m.price >= z.price ? 'S' : 'R', active: true })),
   ] : [];
-  const ghosts = ui.sr && candlesTf === ui.tf ? ((replay.on ? replay.sr.ghosts : srGhosts)[ui.tf] || []).map(g => zShift(g, histOffset())) : [];
+  const ghosts = ui.sr && candlesTf === ui.tf ? ((replay.on ? replay.sr.ghosts : srGhosts)[ui.tf] || []).map(g => zShift(g, zoneOffset())) : [];
   const key = zs.map(z => `${z.kind}${z.lo.toFixed(2)}${z.hi.toFixed(2)}${z.t}${z.touches}${z.active ? 1 : 0}`).join('|') + '#' + ghosts.map(g => `${g.t}-${g.to}`).join(',');
   if (key === srKey) return;
   srKey = key;
@@ -1028,8 +1030,29 @@ function renderSR() {
 // Replays the loaded history candle by candle. Indicators, S/R zones (with their own fixed/faded state),
 // strategy signals and your trades show only what was known at the close of the last replayed candle.
 // Live ticks keep arriving in the background, and the live chart comes back on exit.
-const replay = { on: false, all: [], atr: [], i: 0, timer: null, picking: false, sr: null };
+const replay = { on: false, all: [], atr: [], i: 0, timer: null, picking: false, sr: null, o: 0, snaps: new Map(), mtf: {} };
 const replayNow = () => replay.all[replay.i].time + TF[ui.tf].sec;
+const livePrice = () => raw.length ? shift(raw[raw.length - 1]).close : lastPrice; // real positions use this, not the replayed price
+function replayMTF() { // bias of each timeframe from the candles that had closed by the replay time
+  const now = replayNow(), key = now + '|' + Object.keys(replay.mtf).join();
+  if (replay.mtfCache && replay.mtfCache.key === key) return replay.mtfCache.out;
+  const out = {};
+  for (const [tf, bars] of Object.entries(replay.mtf)) {
+    const done = bars.filter(b => b.time + TF[tf].sec <= now).slice(-250);
+    if (done.length < 210) continue; // not enough history that far back
+    const ind = computeIndicators(done), i = done.length - 1;
+    out[tf] = { score: ind.score[i], rsi: ind.rsi[i] };
+  }
+  replay.mtfCache = { key, out };
+  return out;
+}
+async function loadReplayMTF() {
+  const src = feed.key === 'spot' ? SOURCES.bnFut : SOURCES[feed.key];
+  for (const [tf, n] of [['15m', 1500], ['1h', 1500], ['4h', 1000], ['1d', 400]]) {
+    try { const bars = await src.history(tf, n); if (replay.on) replay.mtf[tf] = bars; } catch { /* skip this timeframe */ }
+  }
+  if (replay.on && !replay.picking) renderMarket();
+}
 function visibleSignals() { // a signal is known once its candle closes; its outcome once the exit candle closes
   if (!replay.on) return strat.signals;
   if (replay.picking) return [];
@@ -1040,22 +1063,29 @@ function visibleSignals() { // a signal is known once its candle closes; its out
 function startReplay() {
   if (candles.length < 200) return toast('Not enough history on this timeframe to replay.');
   setTool('cursor');
-  Object.assign(replay, { on: true, all: candles.slice(0, -1), i: candles.length - 2, sr: { drawn: {}, ghosts: {} } });
+  Object.assign(replay, { on: true, all: candles.slice(0, -1), i: candles.length - 2, sr: { drawn: {}, ghosts: {} }, o: histOffset(), snaps: new Map(), mtf: {} });
   replay.atr = computeIndicators(replay.all).atr;
+  loadReplayMTF();
   $('#replayBar').hidden = false; $$('[data-action=replay]').forEach(b => b.classList.add('on'));
   replayPick();
   refreshStrategies();
 }
 function replayPick() {
   replayPause(); replay.picking = true;
+  if (candles.length !== replay.all.length) { // show the whole history so any candle can be picked, also later ones
+    candles = replay.all.slice(); candleSeries.setData(candles); volSeries.setData(candles.map(volPoint)); srKey = ''; recalc();
+  }
   const h = $('#toolHint'); h.hidden = false; h.textContent = 'Click a candle to start the replay from it';
 }
 function replayGoto(i) {
   i = Math.max(60, Math.min(replay.all.length - 1, i));
   replay.picking = false; $('#toolHint').hidden = true;
-  Object.assign(replay, { i, sr: { drawn: {}, ghosts: {} } });
+  Object.assign(replay, { i, sr: { drawn: {}, ghosts: {} }, snaps: new Map() });
   srCache = { key: '', sr: null };
-  for (let j = Math.max(60, i - 120); j < i; j++) { candles = replay.all.slice(0, j + 1); calc = { atr: replay.atr.slice(0, j + 1) }; stableZones(); } // build up the zones' history
+  for (let j = Math.max(60, i - 120); j < i; j++) { // build up the zones' history
+    candles = replay.all.slice(0, j + 1); calc = { atr: replay.atr.slice(0, j + 1) }; stableZones();
+    replay.snaps.set(j, JSON.stringify(replay.sr));
+  }
   candles = replay.all.slice(0, i + 1);
   candleSeries.setData(candles); volSeries.setData(candles.map(volPoint));
   replayShow();
@@ -1063,11 +1093,19 @@ function replayGoto(i) {
 function replayShow() {
   onPrice(candles[candles.length - 1].close);
   srKey = ''; recalc(); renderMarket();
-  $('#rpTime').textContent = new Date(replayNow() * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  replay.snaps.set(replay.i, JSON.stringify(replay.sr)); // zone state after this candle, so stepping back shows exactly what was shown
+  $('#rpTime').textContent = new Date(replay.all[replay.i].time * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 function replayStep(d) {
   if (!replay.on || replay.picking) return;
-  if (d < 0) { replayPause(); return replayGoto(replay.i - 1); }
+  if (d < 0) {
+    replayPause();
+    const i = replay.i - 1, snap = replay.snaps.get(i - 1);
+    if (!snap) return replayGoto(i);
+    Object.assign(replay, { i, sr: JSON.parse(snap) }); srCache = { key: '', sr: null };
+    candles = replay.all.slice(0, i + 1); candleSeries.setData(candles); volSeries.setData(candles.map(volPoint));
+    return replayShow();
+  }
   if (replay.i >= replay.all.length - 1) { replayPause(); return toast('Replay reached the live candle. Exit to go back to live.'); }
   const b = replay.all[++replay.i];
   candles.push(b); candleSeries.update(b); volSeries.update(volPoint(b));
@@ -1086,7 +1124,7 @@ function replayPause() {
 function exitReplay() {
   if (!replay.on) return;
   replayPause();
-  Object.assign(replay, { on: false, picking: false, sr: null, all: [], atr: [] });
+  Object.assign(replay, { on: false, picking: false, sr: null, all: [], atr: [], snaps: new Map(), mtf: {} });
   $('#replayBar').hidden = true; $('#toolHint').hidden = true; $$('[data-action=replay]').forEach(b => b.classList.remove('on'));
   srCache = { key: '', sr: null };
   rebuildDisplay();
@@ -1240,7 +1278,8 @@ function renderPlanLines(valid) {
   if (valid && ui.tab === 'plan') {
     add(plan.entry, COL.accent, 'ENTRY'); add(plan.sl, COL.down, 'SL'); add(plan.tp, COL.up, 'TP');
   }
-  if (ui.marks) for (const t of trades.filter(t => t.status === 'open')) {
+  const now = replay.on ? replayNow() * 1000 : Infinity;
+  if (ui.marks) for (const t of trades.filter(t => replay.on ? t.openTime < now && (t.status === 'open' || t.closeTime > now) : t.status === 'open')) {
     add(t.entry, 'rgba(74,163,255,.6)', `${t.dir === 'long' ? 'B' : 'S'} ${t.lots}`);
     if (ok(t.sl)) add(t.sl, 'rgba(239,83,80,.6)', 'SL');
     if (ok(t.tp)) add(t.tp, 'rgba(38,166,154,.6)', 'TP');
@@ -1529,7 +1568,7 @@ function liveAdvice(t, px) {
 }
 function renderOpenTrades() {
   const open = trades.filter(t => t.status === 'open');
-  const px = lastPrice;
+  const px = livePrice();
   $('#openTrades').innerHTML = `<h4>Open positions (${open.length})</h4>` + (open.length ? open.map(t => {
     const a = px != null ? liveAdvice(t, px) : { pnl: null, p: null, out: [] };
     return `<div class="trade ${t.dir}">
@@ -1561,9 +1600,9 @@ function renderJournal() {
 document.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b.dataset.close) { if (lastPrice != null) closeTrade(b.dataset.close, lastPrice, 'manual'); }
+  if (b.dataset.close) { const px = livePrice(); if (px != null) closeTrade(b.dataset.close, px, 'manual'); }
   else if (b.dataset.closeat) {
-    const v = num(prompt('Exit price:', lastPrice != null ? r2(lastPrice) : ''));
+    const px = livePrice(), v = num(prompt('Exit price:', px != null ? r2(px) : ''));
     if (v != null) closeTrade(b.dataset.closeat, v, 'manual');
   } else if (b.dataset.del) {
     if (confirm('Delete this trade?')) {
@@ -1856,9 +1895,9 @@ $$('#tools [data-toggle]').forEach(b => b.onclick = () => {
   } saveUI(); applyVisibility(); renderSR(); renderMarkers(); renderPlanLines(ui.tab === 'plan' && !planInvalid());
 });
 $('#tools [data-action=clear]').onclick = () => { if (drawings.length && confirm('Remove all drawings?')) { drawings = []; store.set('drawings', drawings); renderDrawings(); } };
-$$('[data-action=replay]').forEach(b => b.onclick = () => replay.on ? exitReplay() : startReplay());
-$$('#replayBar [data-rp]').forEach(b => b.onclick = () => ({ back: () => replayStep(-1), fwd: () => replayStep(1), play: replayToggle, pick: replayPick, exit: exitReplay })[b.dataset.rp]());
-$('#rpSpeed').onchange = () => { if (replay.timer) { replayPause(); replayToggle(); } };
+$$('[data-action=replay]').forEach(b => b.onclick = () => { b.blur(); replay.on ? exitReplay() : startReplay(); });
+$$('#replayBar [data-rp]').forEach(b => b.onclick = () => b.blur() || ({ back: () => replayStep(-1), fwd: () => replayStep(1), play: replayToggle, pick: replayPick, exit: exitReplay })[b.dataset.rp]());
+$('#rpSpeed').onchange = () => { $('#rpSpeed').blur(); if (replay.timer) { replayPause(); replayToggle(); } };
 $('#tools [data-action=fit]').onclick = () => chart.timeScale().setVisibleLogicalRange({ from: candles.length - 150, to: candles.length + 8 });
 $('#importFile').onchange = async e => { const f = e.target.files[0]; if (f) importCSV(await f.text()); e.target.value = ''; };
 $('#exportBtn').onclick = exportCSV;
