@@ -4,4 +4,5 @@ journal-sync.js
 journal-sync.csv
 *.log
 node_modules/
+release/
 .env

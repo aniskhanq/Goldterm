@@ -1,5 +1,7 @@
 # GoldTerm: XAU/USD terminal
 
+**Version 1.0.0** · see [CHANGELOG.md](CHANGELOG.md)
+
 A TradingView-style gold chart with live data, a trade outcome estimator and a trading journal with performance analytics. It's three static files with no build step, no server and no API key.
 
 **Run it:** double-click `index.html` (Chrome or Edge).
@@ -71,6 +73,7 @@ Full results are in [Results](#results) below.
 - **Data:** Binance XAUUSDT perpetual 15m and 5m candles, converted to spot prices.
 - **Timing:** it polls 2 seconds after every 5m candle closes.
 - **Catching up:** after the PC sleeps, it backfills any missed candles. Alerts that arrive more than 2 minutes late are marked **⏰ LATE**.
+- **Paper trades:** each signal is traded with the strategy's own stop and 3R target. Lots are sized to risk **$45** (rounded down to 0.01, minimum 0.01). Results are reported in $ and as a % of the account balance in `forward/config.json` (default $5,000).
 
 ```
 node tools/forward-test.mjs
@@ -81,6 +84,27 @@ It needs two files:
 - `~/.goldterm/telegram_chat_id.txt`: your chat ID
 
 The bot writes its state and logs to `forward/`. That folder holds personal data, and `.gitignore` keeps it out of git.
+
+To keep it running when your PC sleeps, run it on a small always-on server, such as a Linux systemd service with `Restart=always`. On a host without IPv6, set `NODE_OPTIONS="--no-network-family-autoselection --dns-result-order=ipv4first"`. Otherwise Node's `fetch` can time out reaching Telegram, even though `curl` works.
+
+## Backtest
+`tools/backtest.mjs` runs every strategy over all of Binance's XAUUSDT history. It compares fixed-$ exits (0.1 lots, +$100 target, −$40/−$45/−$50/−$100 stops) with each strategy's own stop and 3R target, at 0.1 lots or sized to a $ risk. Every trade is settled on 5m candles. If a stop and target are touched in the same candle, it counts as a stop. Costs are $0.30/oz.
+
+```
+node tools/backtest.mjs            # uses cached candles in forward/backtest-cache.json
+node tools/backtest.mjs --refresh  # downloads the latest history first
+```
+
+Results on a $5,000 account, 12 Dec 2025 – 29 Oct 2026 (677 signals, all four strategies combined):
+
+| Exits | Net | Profit factor | Max drawdown |
+|---|---|---|---|
+| 0.1 lots, +$100 / −$45 | −$1,540 | 0.93 | 61.9% |
+| 0.1 lots, +$100 / −$100 | −$1,124 | 0.97 | 64.0% |
+| Strategy stop + 3R, sized to risk $45 (the bot's rules) | +$7,174 | 1.46 | 12.5% |
+| Strategy stop + 3R, sized to risk $100 | +$14,694 | 1.39 | 28.8% |
+
+The strategies were developed on this same period, so expect live results to be weaker. The forward test is the real check.
 
 ## Results
 All results are in **R** (1R = the amount risked on the trade) and include a 0.0075% cost per trade. Prices are spot XAU/USD.
