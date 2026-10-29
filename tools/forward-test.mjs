@@ -1,6 +1,6 @@
 // Live forward test of GoldTerm's strategies (strategies.js: ORB + SRC on 15m, SWP + CMP on 5m) with Telegram alerts.
 //   - heads-up when a signal may trigger on the current 15m candle (up to 15 minutes early)
-//   - signal alert with entry / stop / 3R target / lot size for 2% risk
+//   - signal alert with entry / stop / target at fixed 0.1 lots: +$100 target, -$40 stop
 //   - paper-trades every signal to its outcome and keeps a running scorecard
 // State lives in ../forward/ so restarts never repeat an alert or lose a trade.
 // Prices: Binance XAUUSDT 15m candles, shown converted to spot XAU/USD (gold-api.com median basis).
@@ -11,7 +11,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 vm.runInThisContext(fs.readFileSync(path.join(ROOT, 'strategies.js'), 'utf8'));
 const DIR = path.join(ROOT, 'forward'); fs.mkdirSync(DIR, { recursive: true });
 const STATE = path.join(DIR, 'state.json'), CONFIG = path.join(DIR, 'config.json');
-if (!fs.existsSync(CONFIG)) fs.writeFileSync(CONFIG, JSON.stringify({ balance: 10000, riskPct: 2 }, null, 1));
+if (!fs.existsSync(CONFIG)) fs.writeFileSync(CONFIG, JSON.stringify({ balance: 5000 }, null, 1));
 const cfg = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
 const st = fs.existsSync(STATE) ? JSON.parse(fs.readFileSync(STATE, 'utf8')) : { since: Math.floor(Date.now() / 1000), seen: [], watched: [], trades: [] };
 st.since5 ??= Math.floor(Date.now() / 1000); // SWP was added later: its forward test starts when it first ran
@@ -51,16 +51,28 @@ async function calibrate() {
 }
 const S = (v, b = basis) => (v + (b ?? 0)).toFixed(2); // perp -> spot for display (b: basis at signal time)
 const spotText = (s, b = basis) => s.replace(/\d{4}\.\d{2}/g, m => S(+m, b)); // prices inside notes / heads-ups
-const lots = risk => Math.max(0.01, Math.floor(cfg.balance * cfg.riskPct / 100 / (risk * 100) * 100) / 100);
+// paper trades: fixed 0.1 lots (10 oz, $10 per $1 move), exit the moment the trade is +$100 (a $10 move) or -$40
+// (a $4 move). The strategy's own stop and 3R target are kept on the trade as stop0 / tp3R for reference.
+const LOTS = 0.1, OZ = LOTS * 100, TARGET_USD = 100, STOP_USD = 40, RULES = 2;
+const usdLevel = (entry, dir, usdAmt) => Math.round((entry + dir * usdAmt / OZ) * 100) / 100;
+const usdTarget = (entry, dir) => usdLevel(entry, dir, TARGET_USD), usdStop = (entry, dir) => usdLevel(entry, dir, -STOP_USD);
+const fixRules = t => { // open trades from older rules switch to the current ones
+  if (t.rules === RULES) return;
+  t.tp3R ??= t.tp; t.stop0 ??= t.stop;
+  Object.assign(t, { lots: LOTS, tp: usdTarget(t.entry, t.dir), stop: usdStop(t.entry, t.dir), rules: RULES });
+};
+const usd = v => `${v >= 0 ? '+' : '-'}$${Math.abs(v).toFixed(2)}`;
 
 function scorecard() {
   const out = {};
   for (const name of ['ORB', 'SRC', 'SWP', 'CMP']) {
     const c = st.trades.filter(t => t.strategy === name && t.R != null);
-    let eq = 1, peak = 1, dd = 0;
-    for (const t of c) { eq *= 1 + cfg.riskPct / 100 * t.R; peak = Math.max(peak, eq); dd = Math.max(dd, 1 - eq / peak); }
+    // equity in $ on the account balance, from the fixed-lot trades only (older trades were sized differently)
+    let eq = cfg.balance, peak = eq, dd = 0;
+    for (const t of c) if (t.usd != null) { eq += t.usd; peak = Math.max(peak, eq); dd = Math.max(dd, 1 - eq / peak); }
     out[name] = { closed: c.length, open: st.trades.filter(t => t.strategy === name && t.R == null).length, wins: c.filter(t => t.R > 0).length,
-                  totalR: c.reduce((a, t) => a + t.R, 0), ret: eq - 1, maxDD: dd };
+                  totalR: c.reduce((a, t) => a + t.R, 0), ret: eq / cfg.balance - 1, maxDD: dd,
+                  usd: eq - cfg.balance, usdTrades: c.filter(t => t.usd != null).length };
   }
   return out;
 }
@@ -69,6 +81,7 @@ const tfOf = t => t.tf || 900; // candle length in seconds (SWP and CMP trade on
 
 function manageTrades() {
   for (const t of st.trades.filter(x => x.R == null)) {
+    fixRules(t); // trades opened before the 0.1-lot / +$100 rules switch to them
     const d = t.dir, tf = tfOf(t), after = (tf === 300 ? bars5 : bars).filter(b => b.time >= t.entryTime);
     for (const b of after) {
       const hs = d === 1 ? b.low <= t.stop : b.high >= t.stop, ht = d === 1 ? b.high >= t.tp : b.low <= t.tp;
@@ -76,13 +89,14 @@ function manageTrades() {
         const exit = hs ? t.stop : ht ? t.tp : b.close, risk = Math.abs(t.entry - t.stop);
         t.R = Math.round((d * (exit - t.entry) / risk - 0.000075 * t.entry / risk) * 100) / 100;
         t.exit = exit; t.exitTime = b.time; t.result = hs ? 'STOP' : ht ? 'TARGET' : 'TIME';
+        t.usd = Math.round(d * (exit - t.entry) * t.lots * 100 * 100) / 100; // gross P&L at the trade's lot size
         const sc = scorecard()[t.strategy];
         const held = Math.max(0, b.time + tf - t.entryTime), hh = held >= 3600 ? `${Math.floor(held / 3600)}h ${Math.round(held % 3600 / 60)}m` : `${Math.round(held / 60)}m`;
         const late = lateBy(b.time + tf);
-        const msg = (late ? `⏰ LATE (${late} min, bot was asleep/offline) ` : '') + `${t.result === 'TARGET' ? '✅ TARGET HIT' : t.result === 'STOP' ? '❌ STOPPED OUT' : '⏱ TIME EXIT'}: ${label(t.strategy)} ${d > 0 ? 'BUY' : 'SELL'} @ ${S(t.entry, t.basis)} → ${S(exit, t.basis)} = ${t.R >= 0 ? '+' : ''}${t.R}R` + NL + `🕒 Opened ${IST(t.entryTime)}, closed ${IST(b.time + tf)} (held ${hh})` + NL +
-          `Forward test so far: ${sc.closed} closed, ${sc.wins} wins, ${sc.totalR >= 0 ? '+' : ''}${sc.totalR.toFixed(2)}R, ${(sc.ret * 100).toFixed(1)}% at ${cfg.riskPct}% risk, max DD ${(sc.maxDD * 100).toFixed(1)}%`;
+        const msg = (late ? `⏰ LATE (${late} min, bot was asleep/offline) ` : '') + `${t.result === 'TARGET' ? '✅ TARGET HIT' : t.result === 'STOP' ? '❌ STOPPED OUT' : '⏱ TIME EXIT'}: ${label(t.strategy)} ${d > 0 ? 'BUY' : 'SELL'} @ ${S(t.entry, t.basis)} → ${S(exit, t.basis)} = ${usd(t.usd)} at ${t.lots} lots (${t.R >= 0 ? '+' : ''}${t.R}R)` + NL + `🕒 Opened ${IST(t.entryTime)}, closed ${IST(b.time + tf)} (held ${hh})` + NL +
+          `Forward test so far: ${sc.closed} closed, ${sc.wins} wins, ${sc.totalR >= 0 ? '+' : ''}${sc.totalR.toFixed(2)}R · ${usd(sc.usd)} over ${sc.usdTrades} trades at ${LOTS} lots = ${(sc.ret * 100).toFixed(1)}% of $${cfg.balance}, max DD ${(sc.maxDD * 100).toFixed(1)}%`;
         log('OUTCOME ' + msg.split(NL).join(' | '));
-        if (stale(b.time + tf)) backlog.push(`${t.result === 'TARGET' ? '✅' : t.result === 'STOP' ? '❌' : '⏱'} ${t.strategy} ${d > 0 ? 'BUY' : 'SELL'} ${IST(t.entryTime)} @ ${S(t.entry, t.basis)} → ${t.result} ${t.R >= 0 ? '+' : ''}${t.R}R`); else telegram(msg);
+        if (stale(b.time + tf)) backlog.push(`${t.result === 'TARGET' ? '✅' : t.result === 'STOP' ? '❌' : '⏱'} ${t.strategy} ${d > 0 ? 'BUY' : 'SELL'} ${IST(t.entryTime)} @ ${S(t.entry, t.basis)} → ${t.result} ${usd(t.usd)}`); else telegram(msg);
         break;
       }
     }
@@ -96,13 +110,13 @@ function evaluate() {
     const id = `${s.strategy}:${s.time}:${s.dir}`;
     if (st.seen.includes(id)) continue;
     st.seen.push(id);
-    const risk = Math.abs(s.entry - s.stop), tf = s.tf || 900;
-    st.trades.push({ id, strategy: s.strategy, dir: s.dir, signalTime: s.time, entryTime: s.entryTime, entry: s.entry, stop: s.stop, tp: s.tp, basis, note: s.note, R: null, ...(s.tf ? { tf: s.tf, hold: s.hold } : {}) });
+    const tf = s.tf || 900, tp = usdTarget(s.entry, s.dir), stop = usdStop(s.entry, s.dir);
+    st.trades.push({ id, strategy: s.strategy, dir: s.dir, signalTime: s.time, entryTime: s.entryTime, entry: s.entry, stop, tp, stop0: s.stop, tp3R: s.tp, lots: LOTS, rules: RULES, basis, note: s.note, R: null, ...(s.tf ? { tf: s.tf, hold: s.hold } : {}) });
     const late = lateBy(s.time + tf);
     const msg = (late ? `⏰ LATE SIGNAL (${late} min after the candle closed, bot was asleep/offline). Price now ~${S(nowPrice())}: only act if it is still near the entry.` + NL : '') +
       `${s.dir > 0 ? '🟢 BUY' : '🔴 SELL'} SIGNAL: ${label(s.strategy)} (XAU/USD ${tf / 60}m)` + NL +
-      `Entry ~${S(s.entry)} · Stop ${S(s.stop)} · Target ${S(s.tp)} (3R)` + NL +
-      `Risk $${risk.toFixed(2)}/oz → ${lots(risk)} lots for ${cfg.riskPct}% of $${cfg.balance}` + NL + `Why: ${spotText(s.note)}` + NL + `🕒 Signal on the ${tf / 60}m candle that closed ${IST(s.time + tf)}` + NL + 'Paper-trading it now; you will get the result.';
+      `Entry ~${S(s.entry)} · Stop ${S(stop)} · Target ${S(tp)}` + NL +
+      `${LOTS} lots: +$${TARGET_USD} at target, -$${STOP_USD} if stopped (${(STOP_USD / cfg.balance * 100).toFixed(1)}% of $${cfg.balance})` + NL + `Why: ${spotText(s.note)}` + NL + `🕒 Signal on the ${tf / 60}m candle that closed ${IST(s.time + tf)}` + NL + 'Paper-trading it now; you will get the result.';
     log('SIGNAL ' + msg.split(NL).join(' | '));
     if (stale(s.time + tf)) backlog.push(`${s.dir > 0 ? '🟢' : '🔴'} ${s.strategy} ${s.dir > 0 ? 'BUY' : 'SELL'} signal ${IST(s.time + tf)} @ ${S(s.entry)}`); else telegram(msg);
   }
@@ -150,7 +164,7 @@ async function poll() {
     if (catching) {
       manageTrades(); catching = false; // settle backfilled trades in the same pass
       if (backlog.length) {
-        const sc = scorecard(), tot = n => `${sc[n].closed} closed, ${sc[n].wins} wins, ${sc[n].totalR >= 0 ? '+' : ''}${sc[n].totalR.toFixed(2)}R`;
+        const sc = scorecard(), tot = n => `${sc[n].closed} closed, ${sc[n].wins} wins, ${sc[n].totalR >= 0 ? '+' : ''}${sc[n].totalR.toFixed(2)}R, ${usd(sc[n].usd)}`;
         telegram(`🔁 Forward test back online. While it was offline (not live, do not trade these):` + NL + backlog.slice(-30).join(NL) + NL + `Scorecard: ORB ${tot('ORB')} · SRC ${tot('SRC')} · SWP ${tot('SWP')} · CMP ${tot('CMP')}`);
       }
     }
