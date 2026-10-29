@@ -17,7 +17,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('goldterm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('goldterm.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
-const BUILD = '20261027e';
+const BUILD = '20261029a';
 const OZ = 100; // 1 standard lot of XAU/USD = 100 troy oz
 const TF = {
   '1m': { bn: '1m', td: '1min', sec: 60 }, '5m': { bn: '5m', td: '5min', sec: 300 },
@@ -37,7 +37,7 @@ function toast(msg, ms = 3500) {
 // ---------- state ----------
 const settings = Object.assign({ provider: 'auto', tdKey: '', offset: 0, balance: 10000, risk: 1, autoClose: true, spotAlign: true, spotHours: true }, store.get('settings', {}));
 if (settings.provider === 'twelve') settings.provider = 'spot';
-const ui = Object.assign({ tf: '15m', ema20: true, ema50: true, ema200: true, bb: false, vwap: false, rsi: true, sr: true, marks: true, siglv: true, alerts: true, tab: 'market' }, store.get('ui', {}));
+const ui = Object.assign({ tf: '15m', ema20: true, ema50: true, ema200: true, bb: false, vwap: false, rsi: true, sr: true, marks: true, sigs: false, alerts: true, tab: 'market' }, store.get('ui', {}));
 const plan = Object.assign({ dir: 'long', entry: null, sl: null, tp: null, lots: 0.1, market: true }, store.get('plan', {}));
 let trades = store.get('trades', []);
 { // trades synced from MetaTrader (journal-sync.js, made by tools/mt5-sync.mjs): add new ones, update ones
@@ -494,6 +494,7 @@ const baseOpts = {
   layout: { background: { type: 'solid', color: cssVar('--bg') }, textColor: cssVar('--muted'), fontFamily: 'system-ui, Segoe UI, sans-serif' },
   grid: { vertLines: { color: cssVar('--grid') }, horzLines: { color: cssVar('--grid') } },
   crosshair: { mode: LWC.CrosshairMode.Normal },
+  handleScroll: { vertTouchDrag: !matchMedia('(pointer: coarse)').matches }, // phones: a vertical swipe on the chart scrolls the page
   rightPriceScale: { borderColor: cssVar('--line'), minimumWidth: 72 },
   timeScale: {
     borderColor: cssVar('--line'), timeVisible: true, secondsVisible: false, rightOffset: 8,
@@ -1253,9 +1254,10 @@ function renderMarkers() {
       mk.push({ time: snapTime(Math.floor(t.closeTime / 1000)), position: t.dir === 'long' ? 'aboveBar' : 'belowBar', color: COL.muted, shape: 'circle' }); // exit point only: no P&L text or win/loss colour
     }
   }
-  // strategy signals (strategies.js): BUY/SELL arrows, and BUY?/SELL? on the forming candle for heads-ups
-  for (const s of visibleSignals()) if (s.time >= first) mk.push({ time: snapTime(s.time), position: s.dir > 0 ? 'belowBar' : 'aboveBar', color: s.dir > 0 ? '#00c853' : '#ff1744', shape: s.dir > 0 ? 'arrowUp' : 'arrowDown', text: `${s.dir > 0 ? 'BUY' : 'SELL'} ${s.strategy}` });
-  for (const w of replay.on ? [] : strat.watches) if (w.dir && w.time >= first) mk.push({ time: snapTime(w.time), position: w.dir > 0 ? 'belowBar' : 'aboveBar', color: COL.gold, shape: 'circle', text: `${w.dir > 0 ? 'BUY?' : 'SELL?'} ${w.strategy}` });
+  // strategy signals (strategies.js): BUY/SELL arrows, and BUY?/SELL? on the forming candle for heads-ups.
+  // Hidden unless the signals toggle is on, to keep the chart clean (they stay in the Journal and on Telegram).
+  if (ui.sigs) for (const s of visibleSignals()) if (s.time >= first) mk.push({ time: snapTime(s.time), position: s.dir > 0 ? 'belowBar' : 'aboveBar', color: s.dir > 0 ? '#00c853' : '#ff1744', shape: s.dir > 0 ? 'arrowUp' : 'arrowDown', text: `${s.dir > 0 ? 'BUY' : 'SELL'} ${s.strategy}` });
+  if (ui.sigs) for (const w of replay.on ? [] : strat.watches) if (w.dir && w.time >= first) mk.push({ time: snapTime(w.time), position: w.dir > 0 ? 'belowBar' : 'aboveBar', color: COL.gold, shape: 'circle', text: `${w.dir > 0 ? 'BUY?' : 'SELL?'} ${w.strategy}` });
   mk.sort((a, b) => a.time - b.time);
   candleSeries.setMarkers(mk);
   renderSignalLevels();
@@ -1264,8 +1266,8 @@ function renderMarkers() {
 // open). Open signals also get labelled price lines. Closed ones are faded, with no P&L.
 const sigLv = { series: [], lines: [], key: '' };
 function renderSignalLevels() {
-  const list = ui.siglv && candles.length ? visibleSignals().filter(s => s.entryTime >= candles[0].time).slice(-8) : [];
-  const key = JSON.stringify([list.map(s => [s.time, s.strategy, s.exitTime]), candles.length && candles[0].time, candles.length, ui.siglv]);
+  const list = ui.sigs && candles.length ? visibleSignals().filter(s => s.entryTime >= candles[0].time).slice(-8) : [];
+  const key = JSON.stringify([list.map(s => [s.time, s.strategy, s.exitTime]), candles.length && candles[0].time, candles.length, ui.sigs]);
   if (key === sigLv.key) return;
   sigLv.key = key;
   sigLv.series.forEach(s => chart.removeSeries(s)); sigLv.lines.forEach(l => candleSeries.removePriceLine(l));

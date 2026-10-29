@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GoldTerm · XAU/USD</title>
-<link rel="stylesheet" href="styles.css?v=20261027e">
+<link rel="stylesheet" href="styles.css?v=20261029a">
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -43,7 +43,7 @@
     <button data-toggle="sr" title="Auto support / resistance"><svg viewBox="0 0 24 24"><path d="M3 7h18M3 17h18" stroke-dasharray="3 2"/></svg></button>
     <button data-toggle="alerts" title="Alerts: S/R zones and your horizontal lines (sound + desktop notification)"><svg viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg></button>
     <button data-toggle="marks" title="Show my trades on chart"><svg viewBox="0 0 24 24"><path d="M7 16l5-8 5 8"/></svg></button>
-    <button data-toggle="siglv" title="Show entry / SL / target of strategy signals"><svg viewBox="0 0 24 24"><path d="M4 6h10M4 12h16M4 18h10" stroke-dasharray="3 2"/></svg></button>
+    <button data-toggle="sigs" title="Show strategy signals (BUY/SELL arrows, entry / SL / target)"><svg viewBox="0 0 24 24"><path d="M4 6h10M4 12h16M4 18h10" stroke-dasharray="3 2"/></svg></button>
     <button data-action="replay" title="Bar replay: click a candle to start from it, then step or play forward (Esc exits)"><svg viewBox="0 0 24 24"><path d="M5 5v14"/><path d="M9 5l10 7-10 7z"/></svg></button>
     <button data-action="fit" title="Reset zoom"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
   </nav>
@@ -161,10 +161,10 @@
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
-<script src="strategies.js?v=20261027e"></script>
+<script src="strategies.js?v=20261029a"></script>
 <script src="forward/forward.js" onerror="window.FORWARD = null"></script>
-<script src="levels.js?v=20261027e"></script>
+<script src="levels.js?v=20261029a"></script>
 <script src="journal-sync.js" onerror="window.PRESET_TRADES = []"></script>
-<script src="app.js?v=20261027e"></script>
+<script src="app.js?v=20261029a"></script>
 </body>
 </html>

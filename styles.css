@@ -184,8 +184,12 @@ dialog small { display: block; margin-top: 3px; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--accent); padding: 9px 16px; border-radius: var(--radius); z-index: 50; box-shadow: 0 6px 24px rgb(0 0 0 / .4); max-width: calc(100vw - 32px); }
 
 @media (max-width: 960px) {
-  body { overflow: auto; }
-  .layout { grid-template-columns: 1fr; grid-template-rows: 62vh auto; }
+  /* one normal page scroll on phones: the page grows with its content instead of nesting scroll boxes */
+  html, body { height: auto; }
+  body { overflow: visible; }
+  .layout { flex: none; grid-template-columns: 1fr; grid-template-rows: 62vh auto; }
+  .panel { min-height: auto; }
+  .tab-body { overflow: visible; }
   .tools { flex-direction: row; justify-content: center; border-right: 0; border-bottom: 1px solid var(--line); padding: 4px; order: -1; }
   .tools hr { width: 1px; height: 20px; border-top: 0; border-left: 1px solid var(--line); margin: 0 4px; }
   .layout { grid-template-rows: auto max(60vh, 340px) auto; } /* landscape phones: chart keeps a usable height, page scrolls */
