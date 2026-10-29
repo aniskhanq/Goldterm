@@ -17,7 +17,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('goldterm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('goldterm.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
-const BUILD = '20261029a';
+const BUILD = '20261029b';
 const OZ = 100; // 1 standard lot of XAU/USD = 100 troy oz
 const TF = {
   '1m': { bn: '1m', td: '1min', sec: 60 }, '5m': { bn: '5m', td: '5min', sec: 300 },
@@ -222,6 +222,7 @@ function rebuildDisplay() {
   onPrice(candles[candles.length - 1].close);
   srKey = '';
   recalc();
+  syncStrategyOffset();
 }
 function noteRaw(price, ms) {
   lastRaw = price;
@@ -246,7 +247,7 @@ async function calibrateSpot() {
         basisSamples.push(spot - ref);
         if (basisSamples.length > 9) basisSamples.shift();
         const sorted = [...basisSamples].sort((a, b) => a - b), med = r2(sorted[sorted.length >> 1]);
-        if (Math.abs(med - basis) >= 0.05) { basis = med; if (feed.key !== 'spot') rebuildDisplay(); }
+        if (Math.abs(med - basis) >= 0.05) { basis = med; if (feed.key !== 'spot') rebuildDisplay(); syncStrategyOffset(); }
       }
     } catch { /* keep previous basis */ }
   }
@@ -916,28 +917,44 @@ setInterval(refreshMTF, 120000);
 
 // ---------- strategy signals (London open breakout + S/R candlestick on 15m, liquidity sweep + compression on 5m, from strategies.js) ----------
 // Always computed on 15m / 5m candles, whatever timeframe the chart shows; refreshed every minute.
-const strat = { signals: [], watches: [], bias: null, at: 0 };
+const strat = { signals: [], watches: [], bias: null, at: 0, raw: null, off: null };
+// Binance perp -> displayed price. The spot basis is measured a few seconds after load and drifts, so signals are
+// worked out on the raw candles and re-run (no refetch) whenever this offset moves; otherwise their entry / SL / TP
+// would be perp prices next to a spot chart and live price.
+const stratOffset = () => (+settings.offset || 0) + (feed.key === 'spot' || settings.spotAlign ? basis : 0);
 async function refreshStrategies() {
   if (!window.GoldStrategies || !feed.key) return;
   try {
-    const spotMode = feed.key === 'spot', src = spotMode ? SOURCES.bnFut : SOURCES[feed.key];
-    const off = (+settings.offset || 0) + (spotMode || settings.spotAlign ? basis : 0);
-    const bars = (await src.history('15m', 4500)).map(b => shift(b, off)); // long history so the 1H EMA 200 has settled
-    const from = replay.on ? replay.all[0].time : Math.floor(Date.now() / 1000) - 7 * 86400, res = GoldStrategies.analyze(bars, { fromTime: from });
-    let bars5 = [], err = null;
+    const src = feed.key === 'spot' ? SOURCES.bnFut : SOURCES[feed.key];
+    const b15 = await src.history('15m', 4500); // long history so the 1H EMA 200 has settled
+    let b5 = [], err5 = null;
     if (GoldStrategies.analyze5) {
-      try {
-        bars5 = (await src.history('5m', 14000)).map(b => shift(b, off)); // ~9.5k after the spot-hours filter; analyze5 needs 7k
-        const r5 = GoldStrategies.analyze5(bars5, { fromTime: from });
-        res.signals = res.signals.concat(r5.signals).sort((a, b) => a.time - b.time); res.watches = res.watches.concat(r5.watches);
-      } catch (e) { err = '5m signals: ' + e.message; } // keep the 15m ones
+      try { b5 = await src.history('5m', 14000); } // ~9.5k after the spot-hours filter; analyze5 needs 7k
+      catch (e) { err5 = '5m signals: ' + e.message; b5 = strat.raw?.b5 || []; } // keep the last 5m candles
     }
-    for (const s of res.signals) settleSignal(s, s.tf === 300 ? bars5 : bars);
-    Object.assign(strat, res, { at: Date.now(), err });
-  } catch (e) { strat.err = e.message; } // keep the last result
-  renderMarkers(); renderMarket(); renderTodaySignals();
+    strat.raw = { b15, b5, err5 };
+    analyzeStrategies();
+  } catch (e) { strat.err = e.message; renderMarkers(); renderMarket(); renderTodaySignals(); } // keep the last result
   if (strat.err) setTimeout(refreshStrategies, 15000);
 }
+function analyzeStrategies() {
+  if (!strat.raw) return;
+  const off = stratOffset(), { b15, b5, err5 } = strat.raw;
+  const bars = b15.map(b => shift(b, off)), from = replay.on ? replay.all[0].time : Math.floor(Date.now() / 1000) - 7 * 86400;
+  const res = GoldStrategies.analyze(bars, { fromTime: from });
+  let bars5 = [], err = err5;
+  if (GoldStrategies.analyze5 && b5.length) {
+    try {
+      bars5 = b5.map(b => shift(b, off));
+      const r5 = GoldStrategies.analyze5(bars5, { fromTime: from });
+      res.signals = res.signals.concat(r5.signals).sort((a, b) => a.time - b.time); res.watches = res.watches.concat(r5.watches);
+    } catch (e) { err = '5m signals: ' + e.message; } // keep the 15m ones
+  }
+  for (const s of res.signals) settleSignal(s, s.tf === 300 ? bars5 : bars);
+  Object.assign(strat, res, { at: Date.now(), err, off });
+  renderMarkers(); renderMarket(); renderTodaySignals();
+}
+const syncStrategyOffset = () => { if (strat.raw && Math.abs(stratOffset() - strat.off) >= 0.1) analyzeStrategies(); };
 setInterval(refreshStrategies, 60000);
 // outcome of a signal on its own candles, same rules as tools/forward-test.mjs (stop checked first, time exit after s.hold or 48h)
 function settleSignal(s, bars) {
