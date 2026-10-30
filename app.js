@@ -496,6 +496,7 @@ const baseOpts = {
   grid: { vertLines: { color: cssVar('--grid') }, horzLines: { color: cssVar('--grid') } },
   crosshair: { mode: LWC.CrosshairMode.Normal },
   handleScroll: { vertTouchDrag: !matchMedia('(pointer: coarse)').matches }, // phones: a vertical swipe on the chart scrolls the page
+  handleScale: { pinch: !matchMedia('(pointer: coarse)').matches }, // phones: pinchOnTouch handles it
   rightPriceScale: { borderColor: cssVar('--line'), minimumWidth: 72 },
   timeScale: {
     borderColor: cssVar('--line'), timeVisible: true, secondsVisible: false, rightOffset: 8,
@@ -653,6 +654,34 @@ class BoxPrimitive {
 const boxPrim = new BoxPrimitive();
 candleSeries.attachPrimitive(boxPrim);
 const rsiChart = LWC.createChart($('#rsiChart'), baseOpts);
+// vertTouchDrag also gates dragging the price axis, so phones turn it on for touches that start there
+function axisDragOnTouch(c, el) {
+  const set = vertTouchDrag => c.applyOptions({ handleScroll: { vertTouchDrag } });
+  el.addEventListener('touchstart', e => {
+    const x = e.touches[0].clientX - el.getBoundingClientRect().left;
+    if (x > el.clientWidth - c.priceScale('right').width()) set(true);
+  }, { capture: true, passive: true });
+  for (const type of ['touchend', 'touchcancel']) el.addEventListener(type, e => { if (!e.touches.length) set(false); }, { capture: true, passive: true });
+}
+// the library ignores a pinch if one finger moved before the second landed, which is most real pinches
+function pinchOnTouch(c, el) {
+  const gap = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  let start = null;
+  el.addEventListener('touchstart', e => {
+    const r = c.timeScale().getVisibleLogicalRange();
+    if (e.touches.length !== 2 || !r) { start = null; return; }
+    const x = (e.touches[0].clientX + e.touches[1].clientX) / 2 - el.getBoundingClientRect().left;
+    start = { gap: gap(e.touches), r, mid: c.timeScale().coordinateToLogical(x) ?? (r.from + r.to) / 2 };
+  }, { capture: true, passive: true });
+  el.addEventListener('touchmove', e => {
+    if (!start || e.touches.length !== 2) return;
+    if (e.cancelable) e.preventDefault();
+    const { r, mid } = start, k = Math.max(start.gap / gap(e.touches), 10 / (r.to - r.from)); // never tighter than 10 bars
+    c.timeScale().setVisibleLogicalRange({ from: mid - (mid - r.from) * k, to: mid + (r.to - mid) * k });
+  }, { capture: true, passive: false });
+  el.addEventListener('touchend', e => { if (e.touches.length < 2) start = null; }, { capture: true, passive: true });
+}
+if (matchMedia('(pointer: coarse)').matches) for (const [c, id] of [[chart, '#mainChart'], [rsiChart, '#rsiChart']]) { axisDragOnTouch(c, $(id)); pinchOnTouch(c, $(id)); }
 const rsiSeries = rsiChart.addLineSeries({ color: '#b38cff', lineWidth: 1, priceLineVisible: false, priceFormat: { type: 'price', precision: 1, minMove: 0.1 } });
 [70, 30].forEach(p => rsiSeries.createPriceLine({ price: p, color: COL.muted, lineWidth: 1, lineStyle: LWC.LineStyle.Dashed, axisLabelVisible: false }));
 

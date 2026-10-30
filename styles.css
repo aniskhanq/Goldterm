@@ -211,3 +211,8 @@ dialog small { display: block; margin-top: 3px; }
   .brand, #srcBadge { display: none; }
   .quote .last { font-size: 18px; }
 }
+@media (pointer: coarse) {
+  /* the page scrolls vertically; the chart keeps sideways drags and pinch, the price axis keeps every drag */
+  #mainChart, #rsiChart { touch-action: pan-y; }
+  #mainChart tr:first-child td:last-child, #rsiChart tr:first-child td:last-child { touch-action: none; }
+}

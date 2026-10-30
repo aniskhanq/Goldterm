@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Phones: dragging the price axis stretches the chart again, and a pinch zooms the chart even when one finger lands late (it used to zoom the whole page). Vertical swipes on the candles still scroll the page.
+
 ## 1.1.0 (30 Oct 2026)
 - Analytics: a **forward-test record** of every paper trade the bot has closed. It shows totals (win rate, R, net $, profit factor, max drawdown), a per-strategy table, a $ equity curve and the full trade list. It refreshes every minute while the tab is open.
 - Bot: publishes closed trades to `trades.json` (spot prices, no open-trade or config data) when `GOLDTERM_PUBLIC_DIR` is set.
