@@ -20,7 +20,24 @@ const save = () => {
   fs.writeFileSync(STATE, JSON.stringify(st, null, 1));
   const stats = scorecard();
   fs.writeFileSync(path.join(DIR, 'forward.js'), `// Written by tools/forward-test.mjs. Personal data: do not upload.\nwindow.FORWARD = ${JSON.stringify({ updated: Date.now(), since: st.since * 1000, stats, trades: st.trades.slice(-50) })};\n`);
+  publish();
 };
+// Closed paper trades for the site's Analytics tab, written only where GOLDTERM_PUBLIC_DIR is set (the server).
+// Public: closed trades only, prices converted to spot with the basis at signal time, no open-trade or config data.
+const PUB = process.env.GOLDTERM_PUBLIC_DIR;
+let published = '';
+function publish() {
+  if (!PUB) return;
+  const sp = (v, b) => Math.round((v + (b ?? 0)) * 100) / 100;
+  const trades = st.trades.filter(t => t.R != null).map(t => ({
+    strategy: t.strategy, dir: t.dir, signalTime: t.signalTime, entryTime: t.entryTime, exitTime: t.exitTime + tfOf(t), tf: tfOf(t),
+    entry: sp(t.entry, t.basis), stop: sp(t.stop, t.basis), tp: sp(t.tp, t.basis), exit: sp(t.exit, t.basis),
+    result: t.result, R: t.R, lots: t.lots ?? null, usd: t.usd ?? null, rules: t.rules ?? 1, note: t.note }));
+  const body = JSON.stringify({ since: st.since, balance: cfg.balance, riskUsd: RISK_USD, trades });
+  if (body === published) return;
+  try { fs.writeFileSync(path.join(PUB, 'trades.json.tmp'), body); fs.renameSync(path.join(PUB, 'trades.json.tmp'), path.join(PUB, 'trades.json')); published = body; }
+  catch (e) { log('publish failed: ' + e.message); }
+}
 const NL = String.fromCharCode(10);
 const IST = sec => new Date(sec * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true }) + ' IST';
 const nowSec = () => Math.floor(Date.now() / 1000);

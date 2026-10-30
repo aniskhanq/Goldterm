@@ -17,7 +17,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('goldterm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('goldterm.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
-const BUILD = '1.0.0';
+const BUILD = '1.1.0';
 const OZ = 100; // 1 standard lot of XAU/USD = 100 troy oz
 const TF = {
   '1m': { bn: '1m', td: '1min', sec: 60 }, '5m': { bn: '5m', td: '5min', sec: 300 },
@@ -1827,10 +1827,58 @@ function styleHTML(st) {
     ${notes.map(([cls, t]) => `<div class="note ${cls}">${esc(t)}</div>`).join('')}
     <p class="hint">Most trades in: ${esc(st.topSession)} session. The planner's "My style" button uses your typical stop and size.</p>`;
 }
+// ---------- forward-test record: every paper trade the bot has closed (trades.json, published by tools/forward-test.mjs) ----------
+const fwd = { data: null, err: null, at: 0 };
+async function loadForward() {
+  try {
+    const r = await fetch('trades.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    fwd.data = await r.json(); fwd.err = null;
+  } catch (e) { fwd.err = location.protocol === 'file:' ? 'it is only published on the hosted site' : e.message; }
+  fwd.at = Date.now();
+  if (ui.tab === 'analytics') renderAnalytics();
+}
+setInterval(() => { if (ui.tab === 'analytics') loadForward(); }, 60000);
+const STRAT_LABEL = { ORB: 'London breakout', SRC: 'S/R + candle', SWP: '5m sweep', CMP: '5m compression' };
+const RULES_LABEL = { 1: 'sized at 2% of $10k, scored in R only', 2: '0.1 lots, +$100 target / -$40 stop', 3: 'strategy stop + 3R, sized to risk $45' };
+function forwardHTML() {
+  const head = '<h4>Forward-test record (bot)</h4>';
+  if (!fwd.at) return head + '<div class="empty">Loading the bot\'s closed trades…</div>';
+  if (!fwd.data) return head + `<div class="note warn">Couldn't load the bot's trade record: ${esc(fwd.err)}.</div>`;
+  const d = fwd.data, T = [...d.trades].sort((a, b) => a.exitTime - b.exitTime);
+  if (!T.length) return head + '<div class="empty">The bot has not closed any trades yet.</div>';
+  const when = s => new Date(s * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const wins = T.filter(t => t.R > 0), totR = T.reduce((a, t) => a + t.R, 0), U = T.filter(t => t.usd != null);
+  const gw = U.filter(t => t.usd > 0).reduce((a, t) => a + t.usd, 0), gl = -U.filter(t => t.usd <= 0).reduce((a, t) => a + t.usd, 0);
+  let eq = d.balance, peak = eq, mdd = 0; const curve = [eq];
+  for (const t of U) { eq += t.usd; curve.push(eq); peak = Math.max(peak, eq); mdd = Math.max(mdd, (peak - eq) / peak); }
+  const rows = Object.keys(STRAT_LABEL).map(k => { const g = T.filter(t => t.strategy === k), gu = g.filter(t => t.usd != null);
+    return { k, n: g.length, win: g.length ? g.filter(t => t.R > 0).length / g.length : 0, R: g.reduce((a, t) => a + t.R, 0), net: gu.reduce((a, t) => a + t.usd, 0), nu: gu.length }; }).filter(r => r.n);
+  return head + `<div class="stats three">
+      <div class="stat"><span>Closed</span><b>${T.length}</b> <small>since ${new Date(d.since * 1000).toLocaleDateString([], { day: 'numeric', month: 'short' })}</small></div>
+      <div class="stat"><span>Win rate</span><b>${pct(wins.length / T.length)}</b> <small>${wins.length}/${T.length}</small></div>
+      <div class="stat"><span>Total R</span><b class="${sgn(totR)}">${totR >= 0 ? '+' : ''}${totR.toFixed(2)}R</b></div>
+      <div class="stat"><span>Net $</span><b class="${sgn(curve[curve.length - 1] - d.balance)}">${usd(curve[curve.length - 1] - d.balance)}</b> <small>${U.length} trades</small></div>
+      <div class="stat"><span>Profit factor</span><b>${U.length ? (gl ? (gw / gl).toFixed(2) : '∞') : '—'}</b> <small>$</small></div>
+      <div class="stat"><span>Max DD</span><b class="down">${pct(mdd, 1)}</b> <small>of ${usd(d.balance)}</small></div>
+    </div>
+    ${U.length > 1 ? `<div class="card equity">${equitySVG(curve)}</div>` : ''}
+    <table><tr><th>Strategy</th><th class="r">Trades</th><th class="r">Win%</th><th class="r">R</th><th class="r">Net $</th></tr>
+      ${rows.map(r => `<tr><td>${STRAT_LABEL[r.k]}</td><td class="r">${r.n}</td><td class="r">${pct(r.win)}</td><td class="r ${sgn(r.R)}">${r.R >= 0 ? '+' : ''}${r.R.toFixed(2)}</td><td class="r ${sgn(r.net)}">${r.nu ? usd(r.net) : '—'}</td></tr>`).join('')}</table>
+    <h4>All closed bot trades (${T.length})</h4>
+    <div style="overflow-x:auto"><table><tr><th>Closed</th><th>Trade</th><th class="r">Entry → Exit</th><th class="r">R</th><th class="r">$</th></tr>
+      ${[...T].reverse().map(t => `<tr title="${esc(`${STRAT_LABEL[t.strategy]} · ${t.result} · stop ${fmt(t.stop)} · target ${fmt(t.tp)} · opened ${when(t.entryTime)} · ${RULES_LABEL[t.rules] || ''}${t.note ? ' · ' + t.note : ''}`)}">
+        <td>${when(t.exitTime)}</td>
+        <td class="${t.dir > 0 ? 'up' : 'down'}">${t.strategy} ${t.dir > 0 ? 'BUY' : 'SELL'}${t.lots ? ` <span class="muted">${t.lots}</span>` : ''}<br><span class="muted">${t.result.toLowerCase()}</span></td>
+        <td class="r">${fmt(t.entry)}<br>${fmt(t.exit)}</td>
+        <td class="r ${sgn(t.R)}">${t.R >= 0 ? '+' : ''}${t.R.toFixed(2)}</td>
+        <td class="r ${sgn(t.usd)}">${t.usd != null ? usd(t.usd) : '—'}</td></tr>`).join('')}</table></div>
+    <p class="hint">Paper trades from the forward-test bot, prices in spot XAU/USD. $ is recorded from 29 Oct, when trades got $ sizing (now: ${esc(RULES_LABEL[3])}). Earlier trades were scored in R only. Updated ${new Date(fwd.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.</p>`;
+}
 function renderAnalytics() {
   const el = $('#tab-analytics');
   const c = trades.filter(t => t.status === 'closed' && ok(t.pnl)).sort((a, b) => (a.closeTime || a.openTime) - (b.closeTime || b.openTime));
-  if (!c.length) { el.innerHTML = '<div class="empty">Close or import some trades to see your performance analysis.</div>'; return; }
+  if (!c.length) { el.innerHTML = forwardHTML() + '<h4>Your trades</h4><div class="empty">Close or import some trades to see your performance analysis.</div>'; return; }
   const wins = c.filter(t => t.pnl > 0), losses = c.filter(t => t.pnl <= 0);
   const gp = wins.reduce((a, t) => a + t.pnl, 0), gl = -losses.reduce((a, t) => a + t.pnl, 0);
   const net = gp - gl, wr = wins.length / c.length;
@@ -1852,7 +1900,7 @@ function renderAnalytics() {
   const byDay = groupStats(c, t => WEEKDAYS[new Date(t.openTime).getDay()]).sort((a, b) => WEEKDAYS.indexOf(a.k) - WEEKDAYS.indexOf(b.k));
   const byTag = groupStats(c.filter(t => t.tag), t => t.tag.toLowerCase());
 
-  el.innerHTML = `${styleHTML(learnStyle(c))}
+  el.innerHTML = `${forwardHTML()}<h4>Your trades</h4>${styleHTML(learnStyle(c))}
     <h4>Performance</h4>
     <div class="stats three">
       <div class="stat"><span>Net P&amp;L</span><b class="${sgn(net)}">${usd(net)}</b></div>
@@ -1944,7 +1992,7 @@ function setTab(tab) {
   $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   $$('.tab-body').forEach(b => b.classList.toggle('on', b.id === 'tab-' + tab));
   if (tab === 'plan') runPlan(); else renderPlanLines(false);
-  if (tab === 'analytics') renderAnalytics();
+  if (tab === 'analytics') { renderAnalytics(); loadForward(); }
   if (tab === 'journal') renderJournal();
 }
 $$('#tabs button').forEach(b => b.onclick = () => setTab(b.dataset.tab));
@@ -2001,3 +2049,4 @@ setTool('cursor');
 setTab(ui.tab);
 renderJournal();
 loadFeed();
+loadForward();

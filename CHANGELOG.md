@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 (30 Oct 2026)
+- Analytics: a **forward-test record** of every paper trade the bot has closed. It shows totals (win rate, R, net $, profit factor, max drawdown), a per-strategy table, a $ equity curve and the full trade list. It refreshes every minute while the tab is open.
+- Bot: publishes closed trades to `trades.json` (spot prices, no open-trade or config data) when `GOLDTERM_PUBLIC_DIR` is set.
+
 ## 1.0.0 (30 Oct 2026)
 
 The first versioned release. It covers the terminal, the four strategies, the forward-test bot and the backtest.
