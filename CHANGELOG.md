@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2 (31 Oct 2026)
+- Chart: a weekly (1W) timeframe. Candles open at the Sunday 17:00 New York market open and are labelled with that week's Monday.
+- Fix: a chart with fewer than 60 candles no longer stalls the Market panel and the live feed.
+
 ## 1.1.1 (31 Oct 2026)
 - Phones: dragging the price axis stretches the chart again, and a pinch zooms the chart even when one finger lands late (it used to zoom the whole page). Vertical swipes on the candles still scroll the page.
 - Deployment: a version tag now runs the release checks and publishes a GitHub Release, and the server installs it, with a backup and automatic rollback. The bot is still updated by hand.

@@ -17,12 +17,13 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('goldterm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('goldterm.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
-const BUILD = '1.1.1';
+const BUILD = '1.1.2';
 const OZ = 100; // 1 standard lot of XAU/USD = 100 troy oz
 const TF = {
   '1m': { bn: '1m', td: '1min', sec: 60 }, '5m': { bn: '5m', td: '5min', sec: 300 },
   '15m': { bn: '15m', td: '15min', sec: 900 }, '1h': { bn: '1h', td: '1h', sec: 3600 },
   '4h': { bn: '4h', td: '4h', sec: 14400 }, '1d': { bn: '1d', td: '1day', sec: 86400 },
+  '1w': { bn: '1w', td: '1week', sec: 604800 },
 };
 const durText = s => s < 3600 ? Math.round(s / 60) + ' min' : s < 172800 ? (s / 3600).toFixed(1) + ' h' : (s / 86400).toFixed(1) + ' days';
 const sessionOf = ms => { const h = new Date(ms).getUTCHours(); return h < 7 ? 'Asia' : h < 12 ? 'London' : h < 16 ? 'London/NY overlap' : h < 21 ? 'New York' : 'Rollover'; };
@@ -92,15 +93,17 @@ function spotOpen(sec) {
   if (wd === 6 || (wd === 5 && h >= 17) || (wd === 0 && h < 18)) return false;
   return h !== 17;
 }
-// Candle start for a timestamp. 4H/1D follow the New York close like MT4/MT5 brokers;
-// daily candles are labelled with their trading date.
+// Candle start for a timestamp. 4H/1D/1W follow the New York close like MT4/MT5 brokers;
+// daily candles are labelled with their trading date, weekly ones with that week's Monday.
 function bucketFor(tf, sec) {
   if (tf === '1d') return Math.floor((sec + nyOffset(sec) + 7 * H) / 86400) * 86400;
+  if (tf === '1w') { const day = Math.floor((sec + nyOffset(sec) + 7 * H) / 86400); return (day - (day + 3) % 7) * 86400; }
   if (tf === '4h') { const off = nyOffset(sec); return Math.floor((sec + off + 7 * H) / (4 * H)) * 4 * H - off - 7 * H; }
   return Math.floor(sec / TF[tf].sec) * TF[tf].sec;
 }
 function barEnd(time) {
   if (ui.tf === '1d' && feed.key !== 'spot') return time + 17 * H - nyOffset(time);
+  if (ui.tf === '1w' && feed.key !== 'spot') return time + 4 * 86400 + 17 * H - nyOffset(time); // Friday's close
   return time + TF[ui.tf].sec;
 }
 const spotFilter = bars => settings.spotHours ? bars.filter(b => spotOpen(b.time)) : bars;
@@ -143,8 +146,8 @@ async function bnPaged(cfg, interval, total) {
   return out;
 }
 async function bnHistory(cfg, tf, n) {
-  if (tf === '4h' || tf === '1d') { // rebuild from 1H so candles open at the New York close
-    const hours = await bnPaged(cfg, '1h', Math.ceil(n * (tf === '4h' ? 4 : 24) * 1.45));
+  if (tf === '4h' || tf === '1d' || tf === '1w') { // rebuild from 1H so candles open at the New York close
+    const hours = await bnPaged(cfg, '1h', Math.ceil(n * (tf === '4h' ? 4 : tf === '1d' ? 24 : 168) * 1.45));
     return aggregate(spotFilter(hours), tf).slice(-n);
   }
   return spotFilter(await bnPaged(cfg, TF[tf].bn, n));
@@ -198,12 +201,12 @@ const SOURCES = {
   },
   bnFut: {
     name: 'Binance · XAUUSDT perp', note: 'Gold perpetual futures on Binance, streamed trade by trade.',
-    history: (tf, n) => bnHistory(BN.bnFut, tf, n ?? (tf === '1d' ? 400 : 1000)),
+    history: (tf, n) => bnHistory(BN.bnFut, tf, n ?? (tf === '1w' ? 104 : tf === '1d' ? 400 : 1000)),
     stream: cb => bnStream(BN.bnFut, cb),
   },
   bnPaxg: {
     name: 'Binance · PAXG/USDT', note: 'PAX Gold token (1 token = 1 troy oz), a proxy for XAU/USD.',
-    history: (tf, n) => bnHistory(BN.bnPaxg, tf, n ?? (tf === '1d' ? 400 : 1000)),
+    history: (tf, n) => bnHistory(BN.bnPaxg, tf, n ?? (tf === '1w' ? 104 : tf === '1d' ? 400 : 1000)),
     stream: cb => bnStream(BN.bnPaxg, cb),
   },
 };
@@ -413,7 +416,7 @@ const biasLabel = s => s == null ? '—' : s >= 2 ? 'Bullish' : s <= -2 ? 'Beari
 // 4. Zones untouched for a long time are dropped; the strongest 3 per side are kept.
 function srZones(bars, atrArr) {
   const n = bars.length, last = n - 1, A = atrArr[last];
-  if (n < 60 || !A) return { res: [], sup: [] };
+  if (n < 60 || !A) return { res: [], sup: [], inside: [] };
   const look = Math.min(last, 400), start = last - look, k = 3, px = bars[last].close;
   const piv = [];
   for (let i = Math.max(start, k + 10); i < last - k; i++) {
@@ -1461,7 +1464,7 @@ function evaluate(p) {
   if (obstacle) note('warn', `${s > 0 ? 'Resistance' : 'Support'} at ${fmt(obstacle.price)} (${obstacle.touches} touches) sits between entry and target — price may stall there.`);
   const dist = Math.abs(p.entry - m.price) / A;
   if (dist > 1) note('warn', `Entry is ${dist.toFixed(1)} ATR from market (pending order). Odds assume you get filled.`);
-  if (m.session === 'Asia' && ui.tf !== '1d' && ui.tf !== '4h') note('warn', 'Asian session: gold is usually quieter until London opens (07:00 UTC) — targets take longer.');
+  if (m.session === 'Asia' && ui.tf !== '1w' && ui.tf !== '1d' && ui.tf !== '4h') note('warn', 'Asian session: gold is usually quieter until London opens (07:00 UTC) — targets take longer.');
   if (mc.open / mc.n > 0.3) note('warn', `${pct(mc.open / mc.n)} of simulations hit neither level within 300 bars — target may be ambitious for this timeframe.`);
 
   return { s, risk, reward, rr, riskUsd, rewardUsd, slAtr, tpAtr, mc, bt, btUse, jm, pw, spread, evR, evUsd, verdict, notes, eta: mc.medBars ? mc.medBars * TF[ui.tf].sec : null };

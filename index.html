@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GoldTerm · XAU/USD</title>
-<link rel="stylesheet" href="styles.css?v=1.1.1">
+<link rel="stylesheet" href="styles.css?v=1.1.2">
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -21,7 +21,7 @@
   </div>
   <div class="seg" id="tfs">
     <button data-tf="1m">1m</button><button data-tf="5m">5m</button><button data-tf="15m">15m</button>
-    <button data-tf="1h">1H</button><button data-tf="4h">4H</button><button data-tf="1d">1D</button>
+    <button data-tf="1h">1H</button><button data-tf="4h">4H</button><button data-tf="1d">1D</button><button data-tf="1w">1W</button>
   </div>
   <div class="seg" id="inds">
     <button data-ind="ema20">EMA20</button><button data-ind="ema50">EMA50</button><button data-ind="ema200">EMA200</button>
@@ -161,10 +161,10 @@
 </dialog>
 
 <div id="toast" class="toast" hidden></div>
-<script src="strategies.js?v=1.1.1"></script>
+<script src="strategies.js?v=1.1.2"></script>
 <script src="forward/forward.js" onerror="window.FORWARD = null"></script>
-<script src="levels.js?v=1.1.1"></script>
+<script src="levels.js?v=1.1.2"></script>
 <script src="journal-sync.js" onerror="window.PRESET_TRADES = []"></script>
-<script src="app.js?v=1.1.1"></script>
+<script src="app.js?v=1.1.2"></script>
 </body>
 </html>
