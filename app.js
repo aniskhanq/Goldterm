@@ -17,7 +17,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('goldterm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('goldterm.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
-const BUILD = '1.1.0';
+const BUILD = '1.1.1';
 const OZ = 100; // 1 standard lot of XAU/USD = 100 troy oz
 const TF = {
   '1m': { bn: '1m', td: '1min', sec: 60 }, '5m': { bn: '5m', td: '5min', sec: 300 },

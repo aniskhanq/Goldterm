@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 (31 Oct 2026)
 - Phones: dragging the price axis stretches the chart again, and a pinch zooms the chart even when one finger lands late (it used to zoom the whole page). Vertical swipes on the candles still scroll the page.
+- Deployment: a version tag now runs the release checks and publishes a GitHub Release, and the server installs it, with a backup and automatic rollback. The bot is still updated by hand.
 
 ## 1.1.0 (30 Oct 2026)
 - Analytics: a **forward-test record** of every paper trade the bot has closed. It shows totals (win rate, R, net $, profit factor, max drawdown), a per-strategy table, a $ equity curve and the full trade list. It refreshes every minute while the tab is open.
