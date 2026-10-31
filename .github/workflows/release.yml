@@ -1,0 +1,31 @@
+# A version tag (git tag v1.2.3 && git push origin v1.2.3) publishes a GitHub Release.
+# The EC2 server polls for new releases (deploy/goldterm-deploy.sh) and installs them, so no AWS credentials live here.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only to publish the release
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22
+      - name: Check the release
+        run: node tools/check-release.mjs "$GITHUB_REF_NAME"
+      - name: Build the site bundle
+        run: |
+          tar -czf site.tar.gz $(node tools/check-release.mjs --files)
+          sha256sum site.tar.gz > SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" site.tar.gz SHA256SUMS --verify-tag --generate-notes

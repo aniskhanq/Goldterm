@@ -1,0 +1,13 @@
+[Unit]
+Description=Install the newest GoldTerm site release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/goldterm-deploy
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/usr/share/nginx/html /var/lib/goldterm-deploy /var/backups
