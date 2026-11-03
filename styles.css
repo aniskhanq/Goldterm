@@ -216,3 +216,24 @@ dialog small { display: block; margin-top: 3px; }
   #mainChart, #rsiChart { touch-action: pan-y; }
   #mainChart tr:first-child td:last-child, #rsiChart tr:first-child td:last-child { touch-action: none; }
 }
+
+/* morning plan */
+textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; width: 100%; min-width: 0; resize: vertical; margin-top: 4px; }
+textarea:focus { outline: none; border-color: var(--accent); }
+.m-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+#morningDlg .btn-row { flex-wrap: wrap; }
+.morning { border-left: 3px solid var(--gold); }
+.morning .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.morning .row > .primary, .morning .row > .ghost { flex: none; }
+.morning h4 { margin-top: 12px; }
+.pill { font-size: 11px; border: 1px solid currentColor; border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
+.m-thesis { margin: 8px 0; font-style: italic; color: var(--text); }
+.m-times { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted); }
+.m-times b { color: var(--text); font-weight: 600; }
+.m-list { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5; }
+.m-list li { margin-bottom: 4px; }
+
+/* account */
+.replay-btn.warn { color: var(--warn); border-color: var(--warn); }
+#accountBody p { margin: 0 0 10px; }
+#accountBody a { color: var(--accent); }

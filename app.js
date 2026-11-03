@@ -17,7 +17,7 @@ const store = {
   get(k, d) { try { const v = localStorage.getItem('goldterm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('goldterm.' + k, JSON.stringify(v)); } catch { /* storage unavailable */ } },
 };
-const BUILD = '1.1.2';
+const BUILD = '1.2.0';
 const OZ = 100; // 1 standard lot of XAU/USD = 100 troy oz
 const TF = {
   '1m': { bn: '1m', td: '1min', sec: 60 }, '5m': { bn: '5m', td: '5min', sec: 300 },
@@ -1684,6 +1684,7 @@ function renderTodaySignals() {
 }
 const planInvalid = () => !(ok(plan.entry) && ok(plan.sl) && ok(plan.tp)) || (plan.dir === 'long' ? !(plan.sl < plan.entry && plan.tp > plan.entry) : !(plan.sl > plan.entry && plan.tp < plan.entry));
 function renderJournal() {
+  renderMorning();
   renderOpenTrades();
   const closed = trades.filter(t => t.status === 'closed').sort((a, b) => (b.closeTime || b.openTime) - (a.closeTime || a.openTime));
   $('#closedTrades').innerHTML = `<h4>Closed trades (${closed.length})</h4>` + (closed.length ? `<table>
@@ -2018,6 +2019,397 @@ function insights(c, s) {
   return out;
 }
 
+// ---------- morning plan: at 08:00 and 18:00 IST (Mon-Fri) ask for your view, then build a session plan ----------
+// Rule-based and in the browser only. "Copy for Claude" packages the same data as a prompt to paste into Claude.
+// Stored per IST date in localStorage (goldterm.morning), last 60 days.
+const IST_TZ = 'Asia/Kolkata', MIN = 60000;
+const tzParts = (ms, tz) => { const p = {}; for (const x of new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short' }).formatToParts(new Date(ms))) p[x.type] = x.value; return p; };
+const istDate = (ms = Date.now()) => { const p = tzParts(ms, IST_TZ); return `${p.year}-${p.month}-${p.day}`; };
+function zonedMs(date, h, m, tz) { // wall-clock h:m on date (YYYY-MM-DD) in tz -> epoch ms
+  const [y, mo, d] = date.split('-').map(Number), want = Date.UTC(y, mo - 1, d, h, m);
+  let t = want;
+  for (let k = 0; k < 3; k++) { const p = tzParts(t, tz); t += want - Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute); }
+  return t;
+}
+const istHM = ms => new Date(ms).toLocaleTimeString('en-IN', { timeZone: IST_TZ, hour: 'numeric', minute: '2-digit', hour12: true });
+const tradingDayOf = sec => new Date((sec + nyOffset(sec) + 6 * 3600) * 1000).toISOString().slice(0, 10); // NY date, rolls at 18:00 NY
+let morning = store.get('morning', {});
+const saveMorning = () => { const keys = Object.keys(morning).sort(); for (const k of keys.slice(0, -120)) delete morning[k]; store.set('morning', morning); };
+const VIEWS = { bear: 'Bearish', bull: 'Bullish', range: 'Range-bound', none: 'No clear view' };
+
+// Market snapshot from the 5m candles the strategy panel already loads (spot-aligned like the signals).
+function morningContext() {
+  const raw5 = strat.raw && strat.raw.b5;
+  if (!raw5 || raw5.length < 2000) return null;
+  const off = stratOffset(), B = raw5.filter(b => spotOpen(b.time)).map(b => shift(b, off));
+  const days = [];
+  for (const b of B) {
+    const k = tradingDayOf(b.time); let d = days[days.length - 1];
+    if (!d || d.k !== k) days.push(d = { k, o: b.open, h: b.high, l: b.low, c: b.close, ah: -Infinity, al: Infinity, an: 0 });
+    d.h = Math.max(d.h, b.high); d.l = Math.min(d.l, b.low); d.c = b.close;
+    const t = new Date(b.time * 1000); // Asian range: 00:00-07:00 UTC of the trading day
+    if (t.getUTCHours() < 7 && t.toISOString().slice(0, 10) === k) { d.ah = Math.max(d.ah, b.high); d.al = Math.min(d.al, b.low); d.an++; }
+  }
+  if (days.length < 25) return null;
+  const today = days[days.length - 1], prev = days[days.length - 2];
+  const emaD = ema(days.slice(0, -1).map(d => d.c), 20).pop();
+  const hours = [];
+  for (const b of B) { const t = Math.floor(b.time / 3600) * 3600, h = hours[hours.length - 1]; if (h && h.time === t) { h.high = Math.max(h.high, b.high); h.low = Math.min(h.low, b.low); h.close = b.close; } else hours.push({ time: t, open: b.open, high: b.high, low: b.low, close: b.close }); }
+  const atrH = atr(hours.slice(0, -1)).filter(ok).pop();
+  const price = B[B.length - 1].close, trend = prev.c < emaD ? -1 : 1, asiaDone = Date.now() / 1000 >= Date.parse(today.k + 'T07:00:00Z') / 1000;
+  const asia = today.an ? { h: today.ah, l: today.al, done: asiaDone } : null;
+  const fad = trend < 0
+    ? { dir: -1, need: today.l + 3 * atrH, levels: [{ k: 'prior-day high', p: prev.h }, ...(asia ? [{ k: 'Asian high', p: asia.h }] : [])] }
+    : { dir: 1, need: today.h - 3 * atrH, levels: [{ k: 'prior-day low', p: prev.l }, ...(asia ? [{ k: 'Asian low', p: asia.l }] : [])] };
+  const sr = calc && calc.market ? { tf: ui.tf, res: calc.market.sr.res.slice(0, 2).map(z => z.price), sup: calc.market.sr.sup.slice(0, 2).map(z => z.price) } : null;
+  const mtfNow = {}; for (const [k, v] of Object.entries(mtf)) mtfNow[k] = v.score;
+  const midnight = Date.parse(today.k + 'T00:00:00Z') / 1000 - 6 * 3600;
+  return { at: Date.now(), day: today.k, price, trend, emaD, prev: { h: prev.h, l: prev.l, c: prev.c }, today: { o: today.o, h: today.h, l: today.l }, asia, atrH, fad, sr, mtf: mtfNow,
+    watches: (strat.watches || []).map(w => w.text), signals: (strat.signals || []).filter(s => s.time >= midnight).length };
+}
+// Your habits, from the closed journal trades (MT5 sync + manual)
+function journalHabits() {
+  const c = trades.filter(t => t.status === 'closed' && ok(t.pnl)).sort((a, b) => a.openTime - b.openTime);
+  const risk = t => ok(t.sl) && ok(t.entry) && t.lots ? Math.abs(t.entry - t.sl) * t.lots * OZ : null;
+  const rs = c.slice(-10).map(risk).filter(ok);
+  let re = 0, reNet = 0;
+  for (const t of c) if (c.some(l => l !== t && l.pnl < 0 && l.closeTime && t.openTime >= l.closeTime && t.openTime - l.closeTime <= 15 * MIN)) { re++; reNet += t.pnl; }
+  const by = {}; for (const t of c) { const s = sessionOf(t.openTime); (by[s] ??= { n: 0, net: 0 }); by[s].n++; by[s].net += t.pnl; }
+  const sess = Object.entries(by).sort((a, b) => b[1].net - a[1].net);
+  const side = d => { const x = c.filter(t => t.dir === d); return { n: x.length, net: x.reduce((s, t) => s + t.pnl, 0) }; };
+  return { n: c.length, avgRisk: rs.length ? rs.reduce((s, v) => s + v, 0) / rs.length : null, maxRisk: rs.length ? Math.max(...rs) : null,
+    re, reNet, best: sess[0] || null, worst: sess.length > 1 ? sess[sess.length - 1] : null, long: side('long'), short: side('short') };
+}
+function sessionTimes(date) { // key times today, shown in IST
+  return [
+    ['London open', zonedMs(date, 8, 0, 'Europe/London')],
+    ['NY gold (COMEX) open', zonedMs(date, 8, 20, 'America/New_York')],
+    ['US cash open', zonedMs(date, 9, 30, 'America/New_York')],
+    ['London close', zonedMs(date, 16, 0, 'Europe/London')],
+  ];
+}
+function buildMorningPlan(v, ctx, hab) {
+  const dir = v.view === 'bear' ? -1 : v.view === 'bull' ? 1 : 0, out = { checks: [], scenarios: [], rules: [] };
+  const risk = +v.riskUsd || r2(settings.balance * settings.risk / 100);
+  if (ctx) {
+    const tr = ctx.trend < 0 ? 'down' : 'up', sc = ['1h', '4h', '1d'].filter(k => ok(ctx.mtf[k])).map(k => `${k.toUpperCase()} ${ctx.mtf[k] > 0 ? '+' : ''}${ctx.mtf[k]}`).join(' · ');
+    out.checks.push({ cls: dir && dir !== ctx.trend ? 'bad' : dir ? 'good' : '', text: `Daily trend is <b>${tr}</b> (yesterday closed ${fmt(ctx.prev.c)}, ${ctx.trend < 0 ? 'below' : 'above'} the daily EMA20 ${fmt(ctx.emaD)}).${sc ? ` Bias scores: ${sc}.` : ''}` +
+      (dir && dir !== ctx.trend ? ' <b>Your view is against the daily trend:</b> half risk, take profit by 1.5–2R, and wait for price to prove you right (a sweep and rejection) instead of anticipating.' : dir ? ' Your view agrees with the daily trend.' : '') });
+    const hi = ctx.asia ? `${fmt(ctx.asia.h)}${ctx.asia.done ? '' : ' (so far)'}` : '—', lo = ctx.asia ? `${fmt(ctx.asia.l)}${ctx.asia.done ? '' : ' (so far)'}` : '—';
+    out.levels = [['Prior-day high', ctx.prev.h], ['Prior-day low', ctx.prev.l], ['Prior-day close', ctx.prev.c], ['Today high', ctx.today.h], ['Today low', ctx.today.l]];
+    out.asia = `Asian range ${lo} – ${hi}`;
+    const L = ctx.fad.levels.map(l => `${l.k} ${fmt(l.p)}`).join(' or '), down = ctx.fad.dir < 0;
+    const fadText = `<b>Your fade setup</b> (from your 3 Nov trade): ${down ? 'a rally' : 'a drop'} to ${down ? 'at least' : 'at most'} <b>${fmt(ctx.fad.need)}</b> (3× 1H ATR from today's ${down ? 'low' : 'high'}) that trades ${down ? 'above' : 'below'} the ${L}, between ${istHM(Date.parse(ctx.day + 'T12:00:00Z'))} and ${istHM(Date.parse(ctx.day + 'T16:00:00Z'))} IST. Then ${down ? 'sell' : 'buy'} a 5m close ${down ? 'below the previous candle\'s low' : 'above the previous candle\'s high'}, stop beyond the ${down ? 'high' : 'low'}, target 2R. Backtested alone it lost (98 trades, −12R), so take it only when it agrees with your read.`;
+    const P = { up1: ctx.prev.h, dn1: ctx.prev.l, ah: ctx.asia ? ctx.asia.h : ctx.prev.h, al: ctx.asia ? ctx.asia.l : ctx.prev.l };
+    if (dir < 0) out.scenarios.push(
+      `<b>A · Sell a rally that fails</b> at ${fmt(Math.min(P.up1, P.ah))}–${fmt(Math.max(P.up1, P.ah))} (Asian / prior-day high): wait for a 5m rejection, stop above the wick.`,
+      `<b>B · Breakdown</b>: a 15m close below ${fmt(Math.min(P.dn1, P.al))} → sell the retest from below, stop back above the level.`,
+      `<b>Wrong if</b> a 1H candle closes above ${fmt(P.up1 + 0.5 * ctx.atrH)}. Then stand aside: no flip to long within the hour.`);
+    else if (dir > 0) out.scenarios.push(
+      `<b>A · Buy a dip that holds</b> at ${fmt(Math.min(P.dn1, P.al))}–${fmt(Math.max(P.dn1, P.al))} (Asian / prior-day low): wait for a 5m rejection, stop below the wick.`,
+      `<b>B · Breakout</b>: a 15m close above ${fmt(Math.max(P.up1, P.ah))} → buy the retest from above, stop back below the level.`,
+      `<b>Wrong if</b> a 1H candle closes below ${fmt(P.dn1 - 0.5 * ctx.atrH)}. Then stand aside: no flip to short within the hour.`);
+    else if (v.view === 'range') out.scenarios.push(
+      `<b>Fade the edges</b>: sell near ${fmt(Math.max(P.up1, P.ah))}, buy near ${fmt(Math.min(P.dn1, P.al))}, only after a 5m rejection. Nothing in the middle.`,
+      `<b>Range is over</b> when a 15m candle closes outside it. Stop fading and wait for the retest.`);
+    else out.scenarios.push('<b>No view, no forced trade.</b> Take only a bot signal or your fade setup with every condition met, at half risk.');
+    out.fad = fadText;
+    const lots = Math.max(0.01, Math.floor(risk / (ctx.atrH * OZ) * 100) / 100);
+    out.rules.push(`Risk <b>${usd(risk)}</b> per trade: ${lots} lots for a 1× 1H ATR stop (${fmt(ctx.atrH)}).`);
+  } else out.rules.push(`Risk <b>${usd(risk)}</b> per trade.`);
+  out.rules.push(`At most <b>${v.maxTrades || 2}</b> trades. Done for the day after 2 losses or ${usd(-2 * risk)}.`);
+  if (hab.avgRisk && risk > 1.8 * hab.avgRisk) out.rules.push(`That risk is ${(risk / hab.avgRisk).toFixed(1)}× your usual (${usd(hab.avgRisk)} over your last 10 trades). One stop at this size costs ${(risk / hab.avgRisk).toFixed(1)} normal losses.`);
+  if (hab.re) out.rules.push(`No new trade within 15 min of a stop-out. You re-entered that fast ${hab.re} time${hab.re > 1 ? 's' : ''}, net ${usd(hab.reNet)}.`);
+  if (hab.best && hab.best[1].net > 0) out.rules.push(`Your best session so far is ${hab.best[0]} (${hab.best[1].n} trades, ${usd(hab.best[1].net)})${hab.worst && hab.worst[1].net < 0 ? `; worst is ${hab.worst[0]} (${hab.worst[1].n} trades, ${usd(hab.worst[1].net)})` : ''}.`);
+  return out;
+}
+function claudePrompt(d) {
+  const { v, ctx, hab } = d, L = [];
+  L.push(`You are my XAU/USD trading coach. Plan my trading session for ${d.date} (times in IST; prices are spot XAU/USD).`, '',
+    `MY VIEW: ${VIEWS[v.view]}, conviction ${v.conv}.`, v.thesis ? `Why: ${v.thesis}` : '', v.levels ? `Levels I'm watching: ${v.levels}` : '', v.news ? `News/events today: ${v.news}` : '',
+    `Limits: max ${v.maxTrades} trades, risk $${v.riskUsd} per trade, account $${settings.balance}.`, '');
+  if (ctx) {
+    L.push(`MARKET SNAPSHOT (${istHM(ctx.at)} IST): price ${fmt(ctx.price)}; 1H ATR ${fmt(ctx.atrH)}.`,
+      `Daily trend ${ctx.trend < 0 ? 'down' : 'up'}: yesterday's close ${fmt(ctx.prev.c)} vs daily EMA20 ${fmt(ctx.emaD)}. Bias scores (-5..+5): ${Object.entries(ctx.mtf).map(([k, s]) => `${k} ${s}`).join(', ') || 'n/a'}.`,
+      `Prior day: high ${fmt(ctx.prev.h)}, low ${fmt(ctx.prev.l)}, close ${fmt(ctx.prev.c)}. Today so far: open ${fmt(ctx.today.o)}, high ${fmt(ctx.today.h)}, low ${fmt(ctx.today.l)}.`,
+      ctx.asia ? `Asian range (00:00-07:00 UTC)${ctx.asia.done ? '' : ' so far'}: low ${fmt(ctx.asia.l)}, high ${fmt(ctx.asia.h)}.` : '',
+      ctx.sr ? `S/R zones (${ctx.sr.tf}): resistance ${ctx.sr.res.map(p => fmt(p)).join(', ') || 'none'}; support ${ctx.sr.sup.map(p => fmt(p)).join(', ') || 'none'}.` : '',
+      ctx.watches.length ? `Bot heads-ups: ${ctx.watches.join(' | ')}` : '', '');
+  }
+  L.push(`SESSION TIMES (IST): ${sessionTimes(d.date).map(([k, t]) => `${k} ${istHM(t)}`).join('; ')}.`, '',
+    `MY HISTORY (${hab.n} closed trades): avg risk last 10 ${hab.avgRisk ? '$' + hab.avgRisk.toFixed(0) : 'n/a'}, max ${hab.maxRisk ? '$' + hab.maxRisk.toFixed(0) : 'n/a'}; shorts ${hab.short.n} net $${hab.short.net.toFixed(0)}, longs ${hab.long.n} net $${hab.long.net.toFixed(0)}; re-entries within 15 min of a loss: ${hab.re} (net $${hab.reNet.toFixed(0)}).`,
+    `MY SETUP (fade): in the daily trend, after a counter-move of 3x 1H ATR from the day's extreme that sweeps the prior-day or Asian high/low, enter on a 5m close through the previous candle, stop beyond the sweep, 2R. It lost as a mechanical rule in a backtest (98 trades, -12R), so it needs discretion.`, '',
+    'Please give me: (1) whether my view fits this data, and the price that proves it wrong; (2) two or three scenarios with exact trigger, stop and target; (3) which time windows to focus on and which to sit out; (4) the rules I must not break today, given my history. Keep it short and concrete.');
+  return L.filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
+}
+function planCheck(d) { // how today's journal trades fit the plan
+  const from = zonedMs(d.date, 0, 0, IST_TZ), to = from + 86400000, risk = +d.v.riskUsd;
+  const t = trades.filter(x => x.openTime >= from && x.openTime < to);
+  if (!t.length) return '';
+  const dir = d.v.view === 'bear' ? 'short' : d.v.view === 'bull' ? 'long' : null, pnl = t.reduce((s, x) => s + (x.status === 'closed' ? x.pnl || 0 : 0), 0);
+  const big = t.filter(x => ok(x.sl) && x.lots && Math.abs(x.entry - x.sl) * x.lots * OZ > 1.2 * risk).length, against = dir ? t.filter(x => x.dir !== dir).length : 0;
+  const notes = [`${t.length}/${d.v.maxTrades} trades`, `P&L <b class="${sgn(pnl)}">${usd(pnl)}</b>`];
+  if (dir) notes.push(against ? `<span class="down">${against} against your view</span>` : 'all with your view');
+  if (big) notes.push(`<span class="down">${big} over your $ risk</span>`);
+  if (t.length > d.v.maxTrades) notes.push('<span class="down">over the trade limit</span>');
+  return `<div class="note ${big || against || t.length > d.v.maxTrades ? 'warn' : 'good'}"><b>Plan check:</b> ${notes.join(' · ')}</div>`;
+}
+// Two prompts a day (IST, Mon-Fri): 'am' at 08:00 (morning plan) and 'pm' at 18:00 (NY-session check-in, before the
+// 18:50 COMEX open). Stored as morning[date] and morning[date + '-pm']. "No trading today" in the morning covers both.
+const SLOTS = {
+  am: { h: 8, key: d => d, title: '☀ Good morning. What\'s your view?', card: 'Morning plan', note: 'What\'s your view on gold today? Open GoldTerm to plan the session.' },
+  pm: { h: 18, key: d => d + '-pm', title: '🌆 NY session check-in. Still the same view?', card: 'NY session plan', note: 'NY session check-in: still the same view? Open GoldTerm to update the plan.' },
+};
+const slotNow = () => { const h = +tzParts(Date.now(), IST_TZ).hour; return h >= SLOTS.pm.h ? 'pm' : h >= SLOTS.am.h ? 'am' : null; };
+const latestPlan = date => morning[SLOTS.pm.key(date)] || morning[date];
+let dlgSlot = 'am', morningAsked = null;
+function renderMorning() {
+  const el = $('#morningCard'); if (!el) return;
+  const date = istDate(), d = latestPlan(date), am = morning[date];
+  if (!d) {
+    const due = morningDue(true);
+    el.innerHTML = `<div class="card morning"><div class="row"><b>☀ Today's plan</b><button class="primary" id="mOpen">${due ? 'Write today\'s plan' : 'Plan now'}</button></div>
+      <p class="hint" style="margin:6px 0 0">${due ? 'What\'s your view on gold today? Two minutes now saves a forced trade later.' : 'You\'ll be asked for your view at 8:00 AM and 6:00 PM IST on weekdays.'}</p></div>`;
+  } else if (d.skip) {
+    el.innerHTML = `<div class="card morning"><div class="row"><b>☀ Today: no trading</b><button class="ghost" id="mOpen">Change</button></div><p class="hint" style="margin:6px 0 0">Set at ${istHM(d.at)} IST.</p></div>${planCheck({ ...d, v: { maxTrades: 0, riskUsd: Infinity, view: 'none' } })}`;
+  } else {
+    const p = d.plan, v = d.v, s = SLOTS[d.slot || 'am'];
+    const changed = d.slot === 'pm' && am && am.v && (am.v.view !== v.view || am.v.conv !== v.conv) ? `<div class="note warn">Changed since the morning: you were <b>${VIEWS[am.v.view]} · ${esc(am.v.conv)}</b> at ${istHM(am.at)}.</div>` : '';
+    const next = d.slot !== 'pm' ? '<p class="hint" style="margin:8px 0 0">NY session check-in at 6:00 PM IST.</p>' : '';
+    el.innerHTML = `<div class="card morning">
+      <div class="row"><b>${d.slot === 'pm' ? '🌆' : '☀'} ${s.card} <span class="muted" style="font-weight:400">· ${istHM(d.at)} IST</span></b><span class="pill ${v.view === 'bear' ? 'down' : v.view === 'bull' ? 'up' : ''}">${VIEWS[v.view]} · ${esc(v.conv)}</span></div>
+      ${v.thesis ? `<p class="m-thesis">“${esc(v.thesis)}”</p>` : ''}
+      ${changed}
+      ${planCheck(d)}
+      ${p.checks.map(c => `<div class="note ${c.cls}">${c.text}</div>`).join('')}
+      ${p.levels ? `<h4>Levels</h4><table>${p.levels.map(([k, x]) => `<tr><td>${k}</td><td class="r">${fmt(x)}</td><td class="r muted">${d.ctx ? (x - d.ctx.price >= 0 ? '+' : '') + fmt(x - d.ctx.price) : ''}</td></tr>`).join('')}
+        ${v.levels ? `<tr><td>Yours</td><td class="r" colspan="2">${esc(v.levels)}</td></tr>` : ''}</table><p class="hint">${p.asia} · price ${fmt(d.ctx.price)} when planned</p>` : ''}
+      <h4>Session (IST)</h4><div class="m-times">${sessionTimes(date).map(([k, t]) => `<span><b>${istHM(t)}</b> ${k}</span>`).join('')}</div>
+      ${v.news ? `<div class="note warn">News: ${esc(v.news)}</div>` : ''}
+      <h4>Scenarios</h4><ul class="m-list">${p.scenarios.map(x => `<li>${x}</li>`).join('')}</ul>
+      ${p.fad ? `<div class="note">${p.fad}</div>` : ''}
+      <h4>Rules for today</h4><ul class="m-list">${p.rules.map(x => `<li>${x}</li>`).join('')}</ul>
+      <div class="btn-row" style="margin-bottom:0"><button class="ghost" id="mOpen">Edit view</button><button class="ghost" id="mRefresh" title="Rebuild with the latest prices">Refresh numbers</button><button class="primary" id="mClaude" title="Copies a prompt with your view and today's data, then opens Claude">Ask Claude to plan</button></div>
+      ${next}
+    </div>`;
+    $('#mRefresh').onclick = () => { const ctx = morningContext(); if (!ctx) return toast('Market data is still loading.'); Object.assign(d, { ctx, hab: journalHabits() }); d.plan = buildMorningPlan(d.v, d.ctx, d.hab); saveMorning(); renderMorning(); };
+    $('#mClaude').onclick = async () => {
+      const text = claudePrompt(d);
+      try { await navigator.clipboard.writeText(text); toast('Prompt copied. Paste it into Claude if it isn\'t filled in.'); } catch { toast('Couldn\'t copy. The prompt opens in Claude instead.'); }
+      window.open('https://claude.ai/new?q=' + encodeURIComponent(text), '_blank', 'noopener');
+    };
+  }
+  $('#mOpen').onclick = () => openMorning();
+}
+function openMorning(slot) { // slot: which prompt this is; by default the one for the current time
+  const date = istDate(); dlgSlot = slot || slotNow() || 'am';
+  const own = morning[SLOTS[dlgSlot].key(date)], d = own && !own.skip ? own : latestPlan(date), v = d && d.v || {}; // 6 PM starts from the morning view
+  const f = $('#morningForm');
+  f.view.value = v.view || 'bear'; f.conv.value = v.conv || 'medium'; f.thesis.value = v.thesis || ''; f.levels.value = v.levels || ''; f.news.value = v.news || '';
+  f.maxTrades.value = v.maxTrades || 2; f.riskUsd.value = v.riskUsd || r2(settings.balance * settings.risk / 100);
+  $('#mTitle').textContent = SLOTS[dlgSlot].title;
+  const ctx = morningContext();
+  $('#mSnap').innerHTML = ctx ? `Price <b>${fmt(ctx.price)}</b> · daily trend <b class="${ctx.trend < 0 ? 'down' : 'up'}">${ctx.trend < 0 ? 'down' : 'up'}</b> · prior day ${fmt(ctx.prev.l)} – ${fmt(ctx.prev.h)}${ctx.asia ? ` · Asia ${fmt(ctx.asia.l)} – ${fmt(ctx.asia.h)}` : ''} · today ${fmt(ctx.today.l)} – ${fmt(ctx.today.h)}` : 'Loading market data… the plan uses it once it arrives.';
+  morningAsked = date + dlgSlot; // this slot has been asked: no automatic re-open unless snoozed
+  if (!$('#morningDlg').open) $('#morningDlg').showModal();
+}
+$('#morningDlg').addEventListener('close', () => {
+  const rv = $('#morningDlg').returnValue, f = $('#morningForm'), date = istDate(), slot = dlgSlot, key = SLOTS[slot].key(date);
+  if (rv === 'later' || rv === '') { store.set('morningSnooze', { date, slot, until: Date.now() + 60 * MIN }); morningAsked = null; return; } // asks again after the hour
+  if (rv === 'skip') { morning[key] = { date, slot, at: Date.now(), skip: true }; saveMorning(); renderMorning(); return; }
+  if (rv !== 'save') return;
+  const v = { view: f.view.value, conv: f.conv.value, thesis: f.thesis.value.trim(), levels: f.levels.value.trim(), news: f.news.value.trim(),
+    maxTrades: Math.max(1, +f.maxTrades.value || 2), riskUsd: Math.max(1, +f.riskUsd.value || r2(settings.balance * settings.risk / 100)) };
+  const ctx = morningContext(), hab = journalHabits();
+  morning[key] = { date, slot, at: Date.now(), v, ctx, hab, plan: buildMorningPlan(v, ctx, hab) }; saveMorning();
+  if (!ctx) setTimeout(() => { const d = morning[key], c = morningContext(); if (d && !d.ctx && c) { d.ctx = c; d.plan = buildMorningPlan(d.v, c, d.hab); saveMorning(); renderMorning(); } }, 15000);
+  setTab('journal'); renderMorning();
+});
+function morningDue(ignoreSnooze) { // weekday, inside a slot (from 08:00 / 18:00 IST), that slot unanswered, day not skipped
+  const p = tzParts(Date.now(), IST_TZ), date = istDate(), slot = slotNow();
+  if (p.weekday === 'Sat' || p.weekday === 'Sun' || !slot) return false;
+  if ((morning[date] && morning[date].skip) || morning[SLOTS[slot].key(date)]) return false;
+  const s = store.get('morningSnooze', null);
+  return ignoreSnooze || !(s && s.date === date && s.slot === slot && s.until > Date.now());
+}
+function checkMorning() {
+  const slot = slotNow(), tag = istDate() + slot;
+  if (replay.on || morningAsked === tag || !morningDue()) return; // once per slot (a close may still be in flight)
+  if ($$('dialog').some(x => x.open)) return; // don't stack on Settings
+  renderMorning(); openMorning(slot); beep();
+  try { if (document.hidden && 'Notification' in window && Notification.permission === 'granted') new Notification('GoldTerm · ' + SLOTS[slot].card, { body: SLOTS[slot].note, tag: 'goldterm-morning' }); } catch { /* ignore */ }
+}
+setInterval(checkMorning, 30000);
+setInterval(renderMorning, 5 * MIN);
+
+// ---------- accounts + sync: Cognito managed login (code + PKCE), data at /api/data on the same CloudFront origin ----------
+// Filled from the goldterm-auth stack outputs (deploy/auth-stack.yaml). Client id and domains are public by design.
+const AUTH = { site: 'https://dzlf58s3v400k.cloudfront.net/', domain: 'https://goldterm-256515745610.auth.ap-southeast-2.amazoncognito.com', clientId: 'iqi4ds5hvh7cfprg41ahpqbdf' };
+const authUsable = () => !!(AUTH.clientId && window.crypto && crypto.subtle && (location.origin + '/' === AUTH.site || location.origin === 'http://localhost:8178'));
+const redirectUri = () => location.origin + '/';
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const randStr = n => b64url(crypto.getRandomValues(new Uint8Array(n)));
+const jwtClaims = t => { try { return JSON.parse(decodeURIComponent(escape(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))))); } catch { return {}; } };
+const auth = { access: null, exp: 0, email: null, sub: null, rt: store.get('authRT', null), refreshing: null };
+async function signIn(page = 'oauth2/authorize') { // page 'signup' opens the create-account form
+  if (!authUsable()) return toast(AUTH.site ? 'Sign in on ' + AUTH.site : 'Accounts are not set up yet.');
+  const verifier = randStr(32), state = randStr(16), nonce = randStr(16);
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  sessionStorage.setItem('goldterm.pkce', JSON.stringify({ verifier, state, nonce }));
+  const q = new URLSearchParams({ response_type: 'code', client_id: AUTH.clientId, redirect_uri: redirectUri(), scope: 'openid email', state, nonce, code_challenge: challenge, code_challenge_method: 'S256' });
+  location.assign(`${AUTH.domain}/${page}?${q}`);
+}
+async function tokenCall(params) {
+  const r = await fetch(AUTH.domain + '/oauth2/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: AUTH.clientId, ...params }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.error || 'HTTP ' + r.status), { status: r.status });
+  return j;
+}
+function setTokens(j, nonce) {
+  const id = jwtClaims(j.id_token || '');
+  if (nonce && id.nonce !== nonce) throw new Error('sign-in reply did not match this browser (nonce)');
+  if (id.aud !== AUTH.clientId) throw new Error('sign-in reply was for another app');
+  auth.access = j.access_token; auth.exp = (jwtClaims(j.access_token).exp || 0) * 1000; auth.email = id.email; auth.sub = id.sub;
+  if (j.refresh_token) { auth.rt = j.refresh_token; store.set('authRT', auth.rt); }
+}
+async function handleAuthCallback() { // back from the sign-in page with ?code&state (or ?error)
+  const q = new URLSearchParams(location.search);
+  if (!q.has('code') && !q.has('error')) return false;
+  history.replaceState(null, '', location.pathname); // the code is single-use: drop it from the address bar
+  const pk = JSON.parse(sessionStorage.getItem('goldterm.pkce') || 'null'); sessionStorage.removeItem('goldterm.pkce');
+  try {
+    if (q.has('error')) throw new Error(q.get('error_description') || q.get('error'));
+    if (!pk || q.get('state') !== pk.state) throw new Error('sign-in reply did not match this browser (state)');
+    setTokens(await tokenCall({ grant_type: 'authorization_code', code: q.get('code'), redirect_uri: redirectUri(), code_verifier: pk.verifier }), pk.nonce);
+    toast('Signed in as ' + auth.email);
+  } catch (e) { toast('Sign-in failed: ' + e.message, 8000); }
+  return true;
+}
+function getAccess(force) { // a valid access token, refreshed when it has under a minute left; null when signed out
+  if (!force && auth.access && auth.exp - 60000 > Date.now()) return Promise.resolve(auth.access);
+  if (!auth.rt) return Promise.resolve(null);
+  return auth.refreshing ||= tokenCall({ grant_type: 'refresh_token', refresh_token: auth.rt })
+    .then(j => { setTokens(j); return auth.access; })
+    .catch(e => { if (e.status === 400) forgetSession(); return null; }) // revoked or expired: signed out
+    .finally(() => { auth.refreshing = null; renderAccount(); });
+}
+function forgetSession() { Object.assign(auth, { access: null, exp: 0, email: null, sub: null, rt: null }); store.set('authRT', null); }
+async function signOut() {
+  const rt = auth.rt;
+  forgetSession();
+  try { if (rt) await fetch(AUTH.domain + '/oauth2/revoke', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: AUTH.clientId, token: rt }) }); } catch { /* still signed out locally */ }
+  location.assign(`${AUTH.domain}/logout?${new URLSearchParams({ client_id: AUTH.clientId, logout_uri: redirectUri() })}`); // also clears the sign-in page's cookie
+}
+async function api(method, path, body) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const tok = await getAccess(attempt > 0);
+    if (!tok) throw Object.assign(new Error('signed out'), { status: 401 });
+    const r = await fetch('/api' + path, { method, headers: { Authorization: 'Bearer ' + tok, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body && JSON.stringify(body), cache: 'no-store' });
+    if (r.status === 401 && attempt === 0) continue;
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(j.error || 'HTTP ' + r.status), { status: r.status });
+    return j;
+  }
+}
+
+// Sync: each key is one item on the server with a version (updatedAt). A save sends the version it started from and is
+// refused (409) if another device saved since; then we pull, merge and save again.
+const SYNC_KEYS = ['trades', 'morning', 'drawings', 'settings'];
+const sync = { base: store.get('syncBase', {}), dirty: new Set(store.get('syncDirty', [])), user: store.get('syncUser', null), busy: false, again: false, at: 0, err: null, applying: false, timer: null };
+const saveSyncMeta = () => { rawStoreSet('syncBase', sync.base); rawStoreSet('syncDirty', [...sync.dirty]); rawStoreSet('syncUser', sync.user); };
+const rawStoreSet = store.set.bind(store);
+store.set = (k, v) => { // every local save of a synced key marks it for upload
+  rawStoreSet(k, v);
+  if (SYNC_KEYS.includes(k) && !sync.applying) { sync.dirty.add(k); rawStoreSet('syncDirty', [...sync.dirty]); if (auth.sub) { clearTimeout(sync.timer); sync.timer = setTimeout(syncNow, 2500); } }
+};
+const syncValue = k => k === 'trades' ? trades : k === 'morning' ? morning : k === 'drawings' ? drawings : (({ tdKey, ...rest }) => rest)(settings); // the Twelve Data key stays on this device
+const hasLocal = k => k === 'settings' ? true : k === 'morning' ? Object.keys(morning).length > 0 : syncValue(k).length > 0;
+function mergeKey(k, remote, local, preferLocal) {
+  const [a, b] = preferLocal ? [remote, local] : [local, remote]; // b wins on the same id / date
+  if (k === 'morning') return { ...a, ...b };
+  if (k === 'settings') return { ...b };
+  const id = x => x.id || JSON.stringify(x), m = new Map();
+  for (const x of a || []) m.set(id(x), x);
+  for (const x of b || []) m.set(id(x), x);
+  const out = [...m.values()];
+  return k === 'trades' ? out.sort((x, y) => (x.openTime || 0) - (y.openTime || 0)) : out;
+}
+function applyKey(k, data) {
+  sync.applying = true;
+  try {
+    if (k === 'trades') { trades = data; saveTrades(); }
+    else if (k === 'morning') { morning = data || {}; saveMorning(); }
+    else if (k === 'drawings') { drawings = data || []; store.set('drawings', drawings); }
+    else if (k === 'settings') { Object.assign(settings, data, { tdKey: settings.tdKey }); store.set('settings', settings); }
+  } finally { sync.applying = false; }
+}
+async function syncNow() {
+  if (!auth.sub) return;
+  if (sync.busy) { sync.again = true; return; }
+  sync.busy = true; sync.err = null; renderAccount();
+  let changed = false;
+  try {
+    for (let round = 0; round < 3; round++) {
+      const remote = new Map((await api('GET', '/data')).items.map(i => [i.k, i]));
+      const fresh = sync.user !== auth.sub; // first sync of this account in this browser
+      if (fresh) {
+        if (sync.user && !confirm(`This browser's GoldTerm data was synced with another account. Merge it into ${auth.email}?\n\nCancel = replace it with ${auth.email}'s data.`)) {
+          rawStoreSet('preSyncBackup', { at: Date.now(), trades, morning, drawings });
+          for (const k of SYNC_KEYS) { const r = remote.get(k); if (r || k !== 'settings') applyKey(k, r ? r.data : k === 'morning' ? {} : []); sync.base[k] = r ? r.updatedAt : 0; }
+          sync.dirty.clear(); sync.user = auth.sub; saveSyncMeta(); changed = true; break;
+        }
+        rawStoreSet('preSyncBackup', { at: Date.now(), trades, morning, drawings }); // undo point before the first merge
+        sync.base = {};
+      }
+      for (const k of SYNC_KEYS) {
+        const r = remote.get(k);
+        if (!r) { sync.base[k] = 0; if (fresh && hasLocal(k)) sync.dirty.add(k); continue; }
+        if (r.updatedAt === sync.base[k]) continue; // unchanged on the server
+        if (sync.dirty.has(k) || fresh) { applyKey(k, mergeKey(k, r.data, syncValue(k), !fresh)); sync.dirty.add(k); }
+        else applyKey(k, r.data);
+        sync.base[k] = r.updatedAt; changed = true;
+      }
+      sync.user = auth.sub; saveSyncMeta();
+      let conflict = false;
+      for (const k of [...sync.dirty]) {
+        try { sync.base[k] = (await api('PUT', '/data/' + k, { data: syncValue(k), base: sync.base[k] || 0 })).updatedAt; sync.dirty.delete(k); }
+        catch (e) { if (e.status === 409) conflict = true; else throw e; }
+      }
+      saveSyncMeta();
+      if (!conflict) break; // otherwise pull the other device's copy and merge again
+    }
+    sync.at = Date.now();
+  } catch (e) { sync.err = e.status === 413 ? 'your data is over the 350 KB limit for one item' : e.message; }
+  finally {
+    sync.busy = false;
+    if (changed) { renderJournal(); renderDrawings(); if (ui.tab === 'analytics') renderAnalytics(); }
+    renderAccount();
+    if (sync.again) { sync.again = false; syncNow(); }
+  }
+}
+setInterval(() => { if (auth.sub && !document.hidden) syncNow(); }, 5 * MIN);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && auth.sub && Date.now() - sync.at > MIN) syncNow(); });
+function renderAccount() {
+  const b = $('#accountBtn'); if (!b) return;
+  b.textContent = auth.sub ? '☁ ' + (auth.email || 'Account').split('@')[0] : 'Sign in';
+  b.classList.toggle('warn', !!(auth.sub && (sync.err || sync.dirty.size && !sync.busy && Date.now() - sync.at > 10 * MIN)));
+  b.title = auth.sub ? `Signed in as ${auth.email}. ${sync.busy ? 'Syncing…' : sync.err ? 'Sync problem: ' + sync.err : sync.at ? 'Synced at ' + new Date(sync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}` : 'Sign in to sync your journal, plans, drawings and settings across devices';
+  const body = $('#accountBody'); if (!body || !$('#accountDlg').open) return;
+  if (!authUsable()) {
+    body.innerHTML = `<p>Accounts work on the secure site${AUTH.site ? `: <a href="${esc(AUTH.site)}">${esc(AUTH.site)}</a>` : ' once it is set up'}.</p><p class="hint">Your data on this page stays in this browser.</p>`;
+  } else if (!auth.sub) {
+    body.innerHTML = `<p>Sign in to keep your journal, morning plans, drawings and settings in sync on every browser and phone. Your Twelve Data API key never leaves this device.</p>
+      <p class="hint">The first time you sign in on a browser, its data is merged into your account (a local backup is kept).</p>
+      <div class="btn-row"><button type="button" class="ghost" id="acSignup">Create account</button><button type="button" class="primary" id="acSignin">Sign in</button></div>`;
+    $('#acSignin').onclick = () => signIn(); $('#acSignup').onclick = () => signIn('signup');
+  } else {
+    body.innerHTML = `<p>Signed in as <b>${esc(auth.email)}</b></p>
+      <p class="hint">${sync.busy ? 'Syncing…' : sync.err ? `<span class="down">Sync problem: ${esc(sync.err)}</span>` : sync.at ? `Synced at ${new Date(sync.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` : 'Not synced yet.'} Journal (${trades.length} trades), morning plans, drawings and settings sync automatically.</p>
+      <div class="btn-row"><button type="button" class="ghost" id="acSignout">Sign out</button><button type="button" class="primary" id="acSync">Sync now</button></div>`;
+    $('#acSync').onclick = syncNow; $('#acSignout').onclick = signOut;
+  }
+}
+
 // ---------- tabs, toolbar, settings ----------
 function setTab(tab) {
   ui.tab = tab; saveUI();
@@ -2082,3 +2474,11 @@ setTab(ui.tab);
 renderJournal();
 loadFeed();
 loadForward();
+$('#morningBtn').onclick = () => openMorning();
+$('#accountBtn').onclick = () => { $('#accountDlg').showModal(); renderAccount(); };
+(async () => { // accounts: finish a sign-in redirect, or resume the saved session, then sync
+  if (authUsable()) { await handleAuthCallback(); if (auth.rt && !auth.sub) await getAccess(true); if (auth.sub) syncNow(); }
+  renderAccount();
+})();
+renderMorning();
+setTimeout(() => { if (/[?&]morning\b/.test(location.search)) openMorning(); else checkMorning(); }, 4000); // ?morning opens the prompt now

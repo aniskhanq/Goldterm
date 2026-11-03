@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>GoldTerm · XAU/USD</title>
-<link rel="stylesheet" href="styles.css?v=1.1.2">
+<link rel="stylesheet" href="styles.css?v=1.2.0">
 <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -29,6 +29,8 @@
   </div>
   <button class="replay-btn" data-action="replay" title="Bar replay: click a candle to start from it, then step or play forward (Esc exits)">&#9654; Replay</button>
   <div class="spacer"></div>
+  <button id="morningBtn" class="replay-btn" title="Today's plan: your view and the session plan (asks at 8:00 AM and 6:00 PM IST on weekdays)">☀ Plan</button>
+  <button id="accountBtn" class="replay-btn" title="Sign in to sync your journal, plans, drawings and settings across devices">Sign in</button>
   <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
 </header>
 
@@ -102,6 +104,7 @@
     </div>
 
     <div class="tab-body" id="tab-journal">
+      <div id="morningCard"></div>
       <div id="todaySignals"></div>
       <div id="openTrades"></div>
       <details class="card" id="addTradeBox">
@@ -159,12 +162,40 @@
     <div class="btn-row"><button value="cancel" class="ghost">Cancel</button><button value="save" class="primary">Save</button></div>
   </form>
 </dialog>
+<dialog id="morningDlg">
+  <form method="dialog" id="morningForm">
+    <h3 id="mTitle">☀ Good morning. What's your view?</h3>
+    <p class="hint" id="mSnap"></p>
+    <label>Your view on gold today
+      <select name="view"><option value="bear">Bearish</option><option value="bull">Bullish</option><option value="range">Range-bound</option><option value="none">No clear view</option></select>
+    </label>
+    <label>Conviction
+      <select name="conv"><option>low</option><option>medium</option><option>high</option></select>
+    </label>
+    <label>Why? Your read in a sentence or two <textarea name="thesis" rows="3" placeholder="e.g. Daily trend down; yesterday's bounce stalled under 3970. Sell rallies into the Asian high."></textarea></label>
+    <label>Levels you're watching <input name="levels" placeholder="e.g. 3972 / 3950 / 3900"></label>
+    <label>News or events today (IST) <input name="news" placeholder="e.g. US ISM 8:30 PM"></label>
+    <div class="m-two">
+      <label>Max trades <input name="maxTrades" type="number" min="1" step="1"></label>
+      <label>Risk per trade ($) <input name="riskUsd" type="number" min="1" step="1"></label>
+    </div>
+    <div class="btn-row"><button value="save" class="primary" style="order:3">Build my plan</button><button value="later" class="ghost">Remind me in 1 h</button><button value="skip" class="ghost">No trading today</button></div>
+  </form>
+</dialog>
+
+<dialog id="accountDlg">
+  <form method="dialog">
+    <h3>Account</h3>
+    <div id="accountBody"></div>
+    <div class="btn-row" style="margin-bottom:0"><button value="close" class="ghost">Close</button></div>
+  </form>
+</dialog>
 
 <div id="toast" class="toast" hidden></div>
-<script src="strategies.js?v=1.1.2"></script>
-<script src="forward/forward.js" onerror="window.FORWARD = null"></script>
-<script src="levels.js?v=1.1.2"></script>
-<script src="journal-sync.js" onerror="window.PRESET_TRADES = []"></script>
-<script src="app.js?v=1.1.2"></script>
+<script src="strategies.js?v=1.2.0"></script>
+<script src="forward/forward.js"></script>
+<script src="levels.js?v=1.2.0"></script>
+<script src="journal-sync.js"></script>
+<script src="app.js?v=1.2.0"></script>
 </body>
 </html>

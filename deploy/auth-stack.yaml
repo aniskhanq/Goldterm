@@ -1,0 +1,319 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  GoldTerm accounts and sync. Cognito sign-up and sign-in (email + password, managed login, code + PKCE),
+  a per-user data API (HTTP API with a JWT authorizer, Lambda, DynamoDB) and CloudFront in front of the
+  EC2 site, so the site and /api/* share one HTTPS origin.
+  Deploy in the project Region (ap-southeast-2):
+    aws cloudformation deploy --stack-name goldterm-auth --template-file deploy/auth-stack.yaml
+      --capabilities CAPABILITY_IAM --parameter-overrides SiteOriginDomain=<EC2 public DNS name>
+
+Parameters:
+  SiteOriginDomain:
+    Type: String
+    Description: Public DNS name of the EC2 web server (nginx on port 80), e.g. ec2-1-2-3-4.<region>.compute.amazonaws.com
+  SiteOriginPath:
+    Type: String
+    Default: /v2
+    Description: Path on the EC2 server that holds the site CloudFront serves (nginx serves html-v2 at /v2/; the server root keeps the earlier version)
+  LocalDevUrl:
+    Type: String
+    Default: http://localhost:8178/
+    Description: Extra callback URL for local testing (Cognito accepts http only for localhost)
+
+Resources:
+  # ---------- accounts ----------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain          # never lose user accounts with the stack
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: goldterm-users
+      UserPoolTier: ESSENTIALS
+      DeletionProtection: ACTIVE
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      UsernameConfiguration: { CaseSensitive: false }
+      AdminCreateUserConfig: { AllowAdminCreateUserOnly: false }   # open sign-up
+      AccountRecoverySetting:
+        RecoveryMechanisms: [{ Name: verified_email, Priority: 1 }]
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 10
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          TemporaryPasswordValidityDays: 3
+      MfaConfiguration: 'OFF'
+      EmailConfiguration: { EmailSendingAccount: COGNITO_DEFAULT }  # fine for low volume; move to SES if sign-ups grow
+      VerificationMessageTemplate:
+        DefaultEmailOption: CONFIRM_WITH_CODE
+        EmailSubject: Your GoldTerm verification code
+        EmailMessage: 'Your GoldTerm verification code is {####}'
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Sub goldterm-${AWS::AccountId}
+      ManagedLoginVersion: 2
+
+  WebClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: goldterm-web
+      GenerateSecret: false                       # public browser client
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]                   # authorization code + PKCE
+      AllowedOAuthScopes: [openid, email]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: [!Sub 'https://${Cdn.DomainName}/', !Ref LocalDevUrl]
+      LogoutURLs: [!Sub 'https://${Cdn.DomainName}/', !Ref LocalDevUrl]
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+      PreventUserExistenceErrors: ENABLED
+      EnableTokenRevocation: true
+      AccessTokenValidity: 60
+      IdTokenValidity: 60
+      RefreshTokenValidity: 30
+      TokenValidityUnits: { AccessToken: minutes, IdToken: minutes, RefreshToken: days }
+
+  LoginBranding:                                  # managed login v2 needs a style per app client
+    Type: AWS::Cognito::ManagedLoginBranding
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref WebClient
+      UseCognitoProvidedValues: true
+
+  # ---------- per-user data ----------
+  DataTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: goldterm-userdata
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: u, AttributeType: S }   # user id (token sub)
+        - { AttributeName: k, AttributeType: S }   # data key: trades | morning | drawings | settings
+      KeySchema:
+        - { AttributeName: u, KeyType: HASH }
+        - { AttributeName: k, KeyType: RANGE }
+      PointInTimeRecoverySpecification: { PointInTimeRecoveryEnabled: true }
+      SSESpecification: { SSEEnabled: true }
+
+  DataFnLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/goldterm-data
+      RetentionInDays: 30
+
+  DataFnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+            Condition: { StringEquals: { 'aws:SourceAccount': !Ref AWS::AccountId } }
+      Policies:
+        - PolicyName: data
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [dynamodb:Query, dynamodb:PutItem]
+                Resource: !GetAtt DataTable.Arn
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt DataFnLogs.Arn
+
+  DataFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: goldterm-data
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: 256
+      Timeout: 10
+      Role: !GetAtt DataFnRole.Arn
+      LoggingConfig: { LogGroup: !Ref DataFnLogs }
+      Environment: { Variables: { TABLE: !Ref DataTable } }
+      Code:
+        ZipFile: |
+          // GET /api/data -> every key of the signed-in user. PUT /api/data/{key} {data, base} -> saved only if the
+          // server copy is still `base` (the version the client last saw), else 409 so the client merges first.
+          const { DynamoDBClient, QueryCommand, PutItemCommand } = require('@aws-sdk/client-dynamodb');
+          const db = new DynamoDBClient({}), T = process.env.TABLE, MAX = 350000;
+          const KEYS = new Set(['trades', 'morning', 'drawings', 'settings']);
+          const res = (s, b) => ({ statusCode: s, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' }, body: JSON.stringify(b) });
+          exports.handler = async e => {
+            const sub = e.requestContext?.authorizer?.jwt?.claims?.sub;
+            if (!sub) return res(401, { error: 'not signed in' });
+            const m = e.requestContext.http.method;
+            if (m === 'GET') {
+              const items = []; let k;
+              do {
+                const r = await db.send(new QueryCommand({ TableName: T, KeyConditionExpression: 'u = :u', ExpressionAttributeValues: { ':u': { S: sub } }, ExclusiveStartKey: k }));
+                for (const i of r.Items) items.push({ k: i.k.S, updatedAt: +i.t.N, data: JSON.parse(i.d.S) });
+                k = r.LastEvaluatedKey;
+              } while (k);
+              return res(200, { items });
+            }
+            if (m === 'PUT') {
+              const key = e.pathParameters?.key;
+              if (!KEYS.has(key)) return res(400, { error: 'unknown key' });
+              const raw = e.isBase64Encoded ? Buffer.from(e.body || '', 'base64').toString() : e.body || '';
+              if (raw.length > MAX + 100) return res(413, { error: 'too large' });
+              let p; try { p = JSON.parse(raw); } catch { return res(400, { error: 'bad json' }); }
+              if (!p || !('data' in p) || !(p.base === 0 || Number.isInteger(p.base))) return res(400, { error: 'need data and base' });
+              const d = JSON.stringify(p.data), t = Date.now();
+              if (d.length > MAX) return res(413, { error: 'too large' });
+              try {
+                await db.send(new PutItemCommand({ TableName: T, Item: { u: { S: sub }, k: { S: key }, t: { N: String(t) }, d: { S: d } },
+                  ConditionExpression: p.base ? 't = :b' : 'attribute_not_exists(t)', ...(p.base ? { ExpressionAttributeValues: { ':b': { N: String(p.base) } } } : {}) }));
+              } catch (x) {
+                if (x.name === 'ConditionalCheckFailedException') return res(409, { error: 'changed on another device' });
+                throw x;
+              }
+              return res(200, { updatedAt: t });
+            }
+            return res(405, { error: 'method not allowed' });
+          };
+
+  Api:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: goldterm-api
+      ProtocolType: HTTP
+
+  ApiAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref Api
+      Name: cognito-jwt
+      AuthorizerType: JWT
+      IdentitySource: [$request.header.Authorization]
+      JwtConfiguration:
+        Issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+        Audience: [!Ref WebClient]   # access tokens carry it as client_id
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref Api
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt DataFn.Arn
+      PayloadFormatVersion: '2.0'
+
+  GetRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: GET /api/data
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ApiAuthorizer
+      Target: !Sub integrations/${ApiIntegration}
+
+  PutRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref Api
+      RouteKey: PUT /api/data/{key}
+      AuthorizationType: JWT
+      AuthorizerId: !Ref ApiAuthorizer
+      Target: !Sub integrations/${ApiIntegration}
+
+  ApiLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /goldterm/api-access
+      RetentionInDays: 30
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref Api
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings: { ThrottlingRateLimit: 10, ThrottlingBurstLimit: 20 }
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiLogs.Arn
+        Format: '{"id":"$context.requestId","t":"$context.requestTime","ip":"$context.identity.sourceIp","route":"$context.routeKey","status":"$context.status","sub":"$context.authorizer.claims.sub","authErr":"$context.authorizer.error","lat":"$context.responseLatency"}'
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DataFn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*
+
+  # ---------- HTTPS front door ----------
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: goldterm-security-headers
+        SecurityHeadersConfig:
+          StrictTransportSecurity: { AccessControlMaxAgeSec: 31536000, IncludeSubdomains: true, Override: true }
+          ContentTypeOptions: { Override: true }
+          FrameOptions: { FrameOption: DENY, Override: true }
+          ReferrerPolicy: { ReferrerPolicy: strict-origin-when-cross-origin, Override: true }
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy: !Sub >-
+              default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline';
+              img-src 'self' data: blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none';
+              form-action 'self'; connect-src 'self' https://goldterm-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com
+              https://fapi.binance.com https://data-api.binance.vision wss://fstream.binance.com wss://stream.binance.com
+              wss://data-stream.binance.vision https://api.twelvedata.com https://api.gold-api.com
+
+  Cdn:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: GoldTerm (site on EC2, /api on API Gateway)
+        HttpVersion: http2and3
+        PriceClass: PriceClass_All
+        DefaultRootObject: index.html
+        Origins:
+          - Id: site
+            DomainName: !Ref SiteOriginDomain
+            OriginPath: !Ref SiteOriginPath
+            CustomOriginConfig: { OriginProtocolPolicy: http-only, HTTPPort: 80 }
+          - Id: api
+            DomainName: !Sub ${Api}.execute-api.${AWS::Region}.amazonaws.com
+            CustomOriginConfig: { OriginProtocolPolicy: https-only, OriginSSLProtocols: [TLSv1.2] }
+        DefaultCacheBehavior:
+          TargetOriginId: site
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad          # Managed-CachingDisabled (nginx is the source of truth)
+          ResponseHeadersPolicyId: !Ref SecurityHeaders
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad        # Managed-CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # Managed-AllViewerExceptHostHeader
+            ResponseHeadersPolicyId: !Ref SecurityHeaders
+        ViewerCertificate: { CloudFrontDefaultCertificate: true }
+
+Outputs:
+  SiteUrl:
+    Value: !Sub https://${Cdn.DomainName}/
+  CognitoDomain:
+    Value: !Sub https://goldterm-${AWS::AccountId}.auth.${AWS::Region}.amazoncognito.com
+  ClientId:
+    Value: !Ref WebClient
+  UserPoolId:
+    Value: !Ref UserPool
+  ApiEndpoint:
+    Value: !GetAtt Api.ApiEndpoint

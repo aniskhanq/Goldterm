@@ -5,9 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# Releases go to html-v2 (served at /v2/ and by CloudFront); the server root keeps the earlier site.
+Environment=GOLDTERM_WEB=/usr/share/nginx/html-v2
+Environment=GOLDTERM_SMOKE_URL=http://127.0.0.1/v2/
 ExecStart=/usr/local/bin/goldterm-deploy
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 NoNewPrivileges=true
-ReadWritePaths=/usr/share/nginx/html /var/lib/goldterm-deploy /var/backups
+ReadWritePaths=/usr/share/nginx/html-v2 /var/lib/goldterm-deploy /var/backups
