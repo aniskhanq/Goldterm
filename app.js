@@ -56,6 +56,8 @@ let drawings = store.get('drawings', []);
 { // levels imported via levels.js: add each once, so a deleted one stays deleted
   const seen = new Set(store.get('presetSeen', []));
   for (const d of window.PRESET_DRAWINGS || []) if (!seen.has(d.id)) { drawings.push(d); seen.add(d.id); }
+  const retired = new Set(window.RETIRED_DRAWINGS || []); // presets withdrawn later (levels.js); seen stays set so they never return
+  drawings = drawings.filter(d => !retired.has(d.id));
   store.set('presetSeen', [...seen]); store.set('drawings', drawings);
 }
 let candles = [], candlesTf = null;

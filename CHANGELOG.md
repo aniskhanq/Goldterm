@@ -6,7 +6,10 @@
 - Hosting: CloudFront in front of the site, with HTTPS and security headers (HSTS, Content-Security-Policy, no framing). The /api/data sync API needs a signed-in token (deploy/auth-stack.yaml).
 - Morning plan: on weekdays GoldTerm asks for your view of gold at 8:00 AM IST, and again at 6:00 PM IST for a NY-session check-in before the COMEX open. The check-in starts from the morning view, and the card notes if it changed; "No trading today" in the morning also skips 6 PM. Each time it asks for bias, conviction, reasons, levels, news, max trades and $ risk, then builds a session plan at the top of the Journal: your view against the daily trend and the bias scores; prior-day, Asian and today's levels; session times in IST; scenarios with prices and the point where the view is wrong; your fade setup's trigger level; and rules taken from your journal (risk compared with your usual, no re-entry within 15 min of a stop-out, your best and worst sessions). A plan check scores the day's trades against the plan. "Ask Claude to plan" copies the same data as a prompt and opens Claude. The **☀ Plan** button opens it any time; `?morning` in the URL opens it right away.
 
-## 1.1.2 (31 Oct 2026)
+## 1.1.3 (5 Nov 2026)
+- Chart: removed the 7 TradingView boxes imported from the 14 Oct snapshot (4087–4218). Price had fallen below all of them, so they showed as a stack of red "TV R" resistances. They are also deleted from browsers that already had them. The two TradingView trend lines stay.
+
+## 1.1.2 (31 Oct 2026, not deployed)
 - Chart: a weekly (1W) timeframe. Candles open at the Sunday 17:00 New York market open and are labelled with that week's Monday.
 - Fix: a chart with fewer than 60 candles no longer stalls the Market panel and the live feed.
 
