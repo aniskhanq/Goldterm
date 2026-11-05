@@ -36,7 +36,7 @@ function toast(msg, ms = 3500) {
 }
 
 // ---------- state ----------
-const settings = Object.assign({ provider: 'auto', tdKey: '', offset: 0, balance: 10000, risk: 1, autoClose: true, spotAlign: true, spotHours: true }, store.get('settings', {}));
+const settings = Object.assign({ provider: 'auto', tdKey: '', offset: 0, balance: 5000, risk: 1, autoClose: true, spotAlign: true, spotHours: true }, store.get('settings', {}));
 if (settings.provider === 'twelve') settings.provider = 'spot';
 const ui = Object.assign({ tf: '15m', ema20: true, ema50: true, ema200: true, bb: false, vwap: false, rsi: true, sr: true, marks: true, sigs: false, alerts: true, tab: 'market' }, store.get('ui', {}));
 const plan = Object.assign({ dir: 'long', entry: null, sl: null, tp: null, lots: 0.1, market: true }, store.get('plan', {}));
@@ -1875,7 +1875,7 @@ async function loadForward() {
 }
 setInterval(() => { if (ui.tab === 'analytics') loadForward(); }, 60000);
 const STRAT_LABEL = { ORB: 'London breakout', SRC: 'S/R + candle', SWP: '5m sweep', CMP: '5m compression' };
-const RULES_LABEL = { 1: 'sized at 2% of $10k, scored in R only', 2: '0.1 lots, +$100 target / -$40 stop', 3: 'strategy stop + 3R, sized to risk $45' };
+const RULES_LABEL = { 1: 'sized at 2% of $10k, scored in R only', 2: '0.1 lots, +$100 target / -$40 stop', 3: 'strategy stop + 3R, sized to risk $45', 4: 'strategy stop + 3R, sized at 1% of the paper balance (compounding)' };
 function forwardHTML() {
   const head = '<h4>Forward-test record (bot)</h4>';
   if (!fwd.at) return head + '<div class="empty">Loading the bot\'s closed trades…</div>';
@@ -1883,32 +1883,33 @@ function forwardHTML() {
   const d = fwd.data, T = [...d.trades].sort((a, b) => a.exitTime - b.exitTime);
   if (!T.length) return head + '<div class="empty">The bot has not closed any trades yet.</div>';
   const when = s => new Date(s * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  const wins = T.filter(t => t.R > 0), totR = T.reduce((a, t) => a + t.R, 0), U = T.filter(t => t.usd != null);
-  const gw = U.filter(t => t.usd > 0).reduce((a, t) => a + t.usd, 0), gl = -U.filter(t => t.usd <= 0).reduce((a, t) => a + t.usd, 0);
-  let eq = d.balance, peak = eq, mdd = 0; const curve = [eq];
-  for (const t of U) { eq += t.usd; curve.push(eq); peak = Math.max(peak, eq); mdd = Math.max(mdd, (peak - eq) / peak); }
-  const rows = Object.keys(STRAT_LABEL).map(k => { const g = T.filter(t => t.strategy === k), gu = g.filter(t => t.usd != null);
-    return { k, n: g.length, win: g.length ? g.filter(t => t.R > 0).length / g.length : 0, R: g.reduce((a, t) => a + t.R, 0), net: gu.reduce((a, t) => a + t.usd, 0), nu: gu.length }; }).filter(r => r.n);
+  const wins = T.filter(t => t.R > 0), totR = T.reduce((a, t) => a + t.R, 0);
+  // every trade in $ on one paper account: R x riskPct of the balance when it opened, compounding (same function as the bot)
+  const riskPct = d.riskPct ?? 1, A = GoldStrategies.paperAccount(T, d.balance, riskPct), acc = new Map(A.rows.map(r => [r.t, r]));
+  const gw = A.rows.filter(r => r.pnl > 0).reduce((a, r) => a + r.pnl, 0), gl = -A.rows.filter(r => r.pnl <= 0).reduce((a, r) => a + r.pnl, 0);
+  const curve = [d.balance, ...A.rows.map(r => r.balance)], net = A.balance - d.balance, mdd = A.maxDD;
+  const rows = Object.keys(STRAT_LABEL).map(k => { const g = T.filter(t => t.strategy === k);
+    return { k, n: g.length, win: g.length ? g.filter(t => t.R > 0).length / g.length : 0, R: g.reduce((a, t) => a + t.R, 0), net: g.reduce((a, t) => a + (acc.get(t)?.pnl ?? 0), 0) }; }).filter(r => r.n);
   return head + `<div class="stats three">
       <div class="stat"><span>Closed</span><b>${T.length}</b> <small>since ${new Date(d.since * 1000).toLocaleDateString([], { day: 'numeric', month: 'short' })}</small></div>
       <div class="stat"><span>Win rate</span><b>${pct(wins.length / T.length)}</b> <small>${wins.length}/${T.length}</small></div>
       <div class="stat"><span>Total R</span><b class="${sgn(totR)}">${totR >= 0 ? '+' : ''}${totR.toFixed(2)}R</b></div>
-      <div class="stat"><span>Net $</span><b class="${sgn(curve[curve.length - 1] - d.balance)}">${usd(curve[curve.length - 1] - d.balance)}</b> <small>${U.length} trades</small></div>
-      <div class="stat"><span>Profit factor</span><b>${U.length ? (gl ? (gw / gl).toFixed(2) : '∞') : '—'}</b> <small>$</small></div>
-      <div class="stat"><span>Max DD</span><b class="down">${pct(mdd, 1)}</b> <small>of ${usd(d.balance)}</small></div>
+      <div class="stat"><span>Balance</span><b class="${sgn(net)}">${usd(A.balance)}</b> <small>${net >= 0 ? '+' : ''}${pct(net / d.balance, 1)} from ${usd(d.balance)}</small></div>
+      <div class="stat"><span>Profit factor</span><b>${gl ? (gw / gl).toFixed(2) : '∞'}</b> <small>${riskPct}% risk</small></div>
+      <div class="stat"><span>Max DD</span><b class="down">${pct(mdd, 1)}</b> <small>from a peak</small></div>
     </div>
-    ${U.length > 1 ? `<div class="card equity">${equitySVG(curve)}</div>` : ''}
+    ${A.rows.length > 1 ? `<div class="card equity">${equitySVG(curve)}</div>` : ''}
     <table><tr><th>Strategy</th><th class="r">Trades</th><th class="r">Win%</th><th class="r">R</th><th class="r">Net $</th></tr>
-      ${rows.map(r => `<tr><td>${STRAT_LABEL[r.k]}</td><td class="r">${r.n}</td><td class="r">${pct(r.win)}</td><td class="r ${sgn(r.R)}">${r.R >= 0 ? '+' : ''}${r.R.toFixed(2)}</td><td class="r ${sgn(r.net)}">${r.nu ? usd(r.net) : '—'}</td></tr>`).join('')}</table>
+      ${rows.map(r => `<tr><td>${STRAT_LABEL[r.k]}</td><td class="r">${r.n}</td><td class="r">${pct(r.win)}</td><td class="r ${sgn(r.R)}">${r.R >= 0 ? '+' : ''}${r.R.toFixed(2)}</td><td class="r ${sgn(r.net)}">${usd(r.net)}</td></tr>`).join('')}</table>
     <h4>All closed bot trades (${T.length})</h4>
-    <div style="overflow-x:auto"><table><tr><th>Closed</th><th>Trade</th><th class="r">Entry → Exit</th><th class="r">R</th><th class="r">$</th></tr>
-      ${[...T].reverse().map(t => `<tr title="${esc(`${STRAT_LABEL[t.strategy]} · ${t.result} · stop ${fmt(t.stop)} · target ${fmt(t.tp)} · opened ${when(t.entryTime)} · ${RULES_LABEL[t.rules] || ''}${t.note ? ' · ' + t.note : ''}`)}">
+    <div style="overflow-x:auto"><table><tr><th>Closed</th><th>Trade</th><th class="r">Entry → Exit</th><th class="r">R</th><th class="r">$ · balance</th></tr>
+      ${[...T].reverse().map(t => { const a = acc.get(t); return `<tr title="${esc(`${STRAT_LABEL[t.strategy]} · ${t.result} · stop ${fmt(t.stop)} · target ${fmt(t.tp)} · opened ${when(t.entryTime)} · ${RULES_LABEL[t.rules] || ''}${t.note ? ' · ' + t.note : ''}`)}">
         <td>${when(t.exitTime)}</td>
         <td class="${t.dir > 0 ? 'up' : 'down'}">${t.strategy} ${t.dir > 0 ? 'BUY' : 'SELL'}${t.lots ? ` <span class="muted">${t.lots}</span>` : ''}<br><span class="muted">${t.result.toLowerCase()}</span></td>
         <td class="r">${fmt(t.entry)}<br>${fmt(t.exit)}</td>
         <td class="r ${sgn(t.R)}">${t.R >= 0 ? '+' : ''}${t.R.toFixed(2)}</td>
-        <td class="r ${sgn(t.usd)}">${t.usd != null ? usd(t.usd) : '—'}</td></tr>`).join('')}</table></div>
-    <p class="hint">Paper trades from the forward-test bot, prices in spot XAU/USD. $ is recorded from 29 Oct, when trades got $ sizing (now: ${esc(RULES_LABEL[3])}). Earlier trades were scored in R only. Updated ${new Date(fwd.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.</p>`;
+        <td class="r ${sgn(a?.pnl)}">${a ? usd(a.pnl) : '—'}<br><span class="muted">${a ? usd(a.balance) : ''}</span></td></tr>`; }).join('')}</table></div>
+    <p class="hint">Paper trades from the forward-test bot, prices in spot XAU/USD. $ for every trade = its R × ${riskPct}% of a ${usd(d.balance)} paper account at the time it opened, compounding (${esc(RULES_LABEL[4])}). The bot rounds lots down to 0.01, so its Telegram $ can differ a little. Updated ${new Date(fwd.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.</p>`;
 }
 function renderAnalytics() {
   const el = $('#tab-analytics');
@@ -2456,7 +2457,7 @@ $('#settingsDlg').addEventListener('close', () => {
   const f = $('#settingsForm'), prev = { ...settings };
   settings.provider = f.provider.value; settings.tdKey = f.tdKey.value.trim();
   settings.spotHours = f.spotHours.checked;
-  settings.offset = +f.offset.value || 0; settings.balance = +f.balance.value || 10000; settings.risk = +f.risk.value || 1;
+  settings.offset = +f.offset.value || 0; settings.balance = +f.balance.value || 5000; settings.risk = +f.risk.value || 1;
   settings.autoClose = f.autoClose.checked;
   settings.spotAlign = f.spotAlign.checked;
   store.set('settings', settings);

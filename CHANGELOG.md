@@ -6,6 +6,11 @@
 - Hosting: CloudFront in front of the site, with HTTPS and security headers (HSTS, Content-Security-Policy, no framing). The /api/data sync API needs a signed-in token (deploy/auth-stack.yaml).
 - Morning plan: on weekdays GoldTerm asks for your view of gold at 8:00 AM IST, and again at 6:00 PM IST for a NY-session check-in before the COMEX open. The check-in starts from the morning view, and the card notes if it changed; "No trading today" in the morning also skips 6 PM. Each time it asks for bias, conviction, reasons, levels, news, max trades and $ risk, then builds a session plan at the top of the Journal: your view against the daily trend and the bias scores; prior-day, Asian and today's levels; session times in IST; scenarios with prices and the point where the view is wrong; your fade setup's trigger level; and rules taken from your journal (risk compared with your usual, no re-entry within 15 min of a stop-out, your best and worst sessions). A plan check scores the day's trades against the plan. "Ask Claude to plan" copies the same data as a prompt and opens Claude. The **☀ Plan** button opens it any time; `?morning` in the URL opens it right away.
 
+## 1.1.4 (6 Nov 2026)
+- Analytics: the bot's forward-test record now shows every trade in $ on one paper account: R × 1% of the balance when the trade opened, compounding from $5,000. Balance, profit factor, max drawdown, the equity curve, the per-strategy table and the trade list (with the running balance) all use it, including trades from before $ sizing started.
+- Bot: lots are sized at 1% of the paper balance instead of a fixed $45, and Telegram shows the paper account balance. Signals at all hours count. Shared with the site through GoldStrategies.paperAccount in strategies.js.
+- Settings: a new browser starts at a $5,000 balance and 1% risk (was $10,000).
+
 ## 1.1.3 (5 Nov 2026)
 - Chart: removed the 7 TradingView boxes imported from the 14 Oct snapshot (4087–4218). Price had fallen below all of them, so they showed as a stack of red "TV R" resistances. They are also deleted from browsers that already had them. The two TradingView trend lines stay.
 
