@@ -293,5 +293,23 @@
     signals.sort((x, y) => x.time - y.time);
     return { signals, watches, levels: levelsAt(f, B[f].close), vwap: vwap[f] };
   }
-  root.GoldStrategies = { analyze, analyze5, RR, version: 2 };
+  // Paper account risking pct% of the balance per trade, compounding. Each trade's risk is set from the balance
+  // realised when it opened (trades still open at that moment don't count yet), so it can be followed live.
+  // trades: [{ entryTime, exitTime, R }]; open trades (R == null) are ignored. Rows come back in exit order.
+  // Shared by tools/forward-test.mjs (lot sizes, Telegram) and the site (Analytics) so both show the same numbers.
+  function paperAccount(trades, start, pct) {
+    const T = trades.filter(t => t.R != null).sort((a, b) => a.entryTime - b.entryTime || a.exitTime - b.exitTime);
+    let balance = start, peak = start, maxDD = 0; const open = [], rows = [];
+    const settle = upTo => {
+      open.sort((a, b) => a.t.exitTime - b.t.exitTime);
+      while (open.length && open[0].t.exitTime <= upTo) {
+        const o = open.shift(); o.pnl = o.t.R * o.risk; balance += o.pnl; o.balance = balance;
+        peak = Math.max(peak, balance); maxDD = Math.max(maxDD, (peak - balance) / peak); rows.push(o);
+      }
+    };
+    for (const t of T) { settle(t.entryTime); open.push({ t, risk: balance * pct / 100 }); }
+    settle(Infinity);
+    return { start, pct, balance, peak, maxDD, rows };
+  }
+  root.GoldStrategies = { analyze, analyze5, RR, paperAccount, version: 2 };
 })(typeof window !== 'undefined' ? window : globalThis);

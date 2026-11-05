@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.4 (6 Nov 2026)
+- Analytics: the bot's forward-test record now shows every trade in $ on one paper account: R × 1% of the balance when the trade opened, compounding from $5,000. Balance, profit factor, max drawdown, the equity curve, the per-strategy table and the trade list (with the running balance) all use it, including trades from before $ sizing started.
+- Bot: lots are sized at 1% of the paper balance instead of a fixed $45, and Telegram shows the paper account balance. Signals at all hours count. Shared with the site through GoldStrategies.paperAccount in strategies.js.
+- Settings: a new browser starts at a $5,000 balance and 1% risk (was $10,000).
+
 ## 1.1.3 (5 Nov 2026)
 - Chart: removed the 7 TradingView boxes imported from the 14 Oct snapshot (4087–4218). Price had fallen below all of them, so they showed as a stack of red "TV R" resistances. They are also deleted from browsers that already had them. The two TradingView trend lines stay.
 - Also releases 1.1.2 (below), which was never deployed on its own.
