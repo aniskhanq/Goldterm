@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.1.2 (31 Oct 2026)
+## 1.1.3 (5 Nov 2026)
+- Chart: removed the 7 TradingView boxes imported from the 14 Oct snapshot (4087–4218). Price had fallen below all of them, so they showed as a stack of red "TV R" resistances. They are also deleted from browsers that already had them. The two TradingView trend lines stay.
+- Also releases 1.1.2 (below), which was never deployed on its own.
+
+## 1.1.2 (31 Oct 2026, not deployed)
 - Chart: a weekly (1W) timeframe. Candles open at the Sunday 17:00 New York market open and are labelled with that week's Monday.
 - Fix: a chart with fewer than 60 candles no longer stalls the Market panel and the live feed.
 
