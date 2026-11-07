@@ -36,6 +36,9 @@ button { cursor: pointer; }
 .logo { color: var(--gold); }
 .sym { display: flex; align-items: center; gap: 8px; }
 .sym-name { font-weight: 700; font-size: 15px; }
+#pairSel { font: inherit; font-weight: 700; font-size: 15px; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; cursor: pointer; }
+#pairSel:hover { border-color: var(--muted); }
+#pairSel option { color: initial; background: initial; }
 .badge { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px; }
 .status { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
 .status i { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
