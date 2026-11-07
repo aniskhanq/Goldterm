@@ -11,7 +11,11 @@
 <header class="topbar">
   <div class="brand"><span class="logo">◆</span> GoldTerm</div>
   <div class="sym">
-    <span class="sym-name">XAU/USD</span>
+    <select id="pairSel" class="sym-name" aria-label="Symbol">
+      <option value="XAUUSD">XAUUSD</option>
+      <option value="XAUUSDT">XAUUSDT</option>
+      <option value="PAXGUSDT">PAXGUSDT</option>
+    </select>
     <span id="srcBadge" class="badge" title="">connecting…</span>
     <span id="status" class="status warn"><i></i><b>loading</b></span>
   </div>

@@ -213,6 +213,31 @@ const SOURCES = {
   },
 };
 
+// Symbol switcher (like TradingView's): each pair is a preset of the data source + spot alignment.
+const PAIRS = {
+  XAUUSD: { label: 'XAU/USD', desc: 'Gold spot, like XAUUSD on TradingView. Real spot candles from Twelve Data when a key is set in Settings, otherwise Binance gold shifted to the live spot price (gold-api.com, within about $0.50).' },
+  XAUUSDT: { label: 'XAUUSDT', desc: 'Binance gold perpetual futures, raw prices. Usually $5-8 above spot because of the futures premium.' },
+  PAXGUSDT: { label: 'PAXG/USDT', desc: 'PAX Gold token on Binance (1 token = 1 troy oz), raw prices. A proxy for gold.' },
+};
+const pairOf = () => settings.provider === 'bnPaxg' ? 'PAXGUSDT' : settings.provider === 'bnFut' && !settings.spotAlign ? 'XAUUSDT' : 'XAUUSD';
+const pairLabel = () => PAIRS[pairOf()].label;
+function renderPair() {
+  const sel = $('#pairSel'), p = pairOf();
+  if (!sel) return;
+  sel.value = p;
+  sel.title = PAIRS[p].desc + (p === 'XAUUSD' && feed.key && feed.key !== 'spot' ? ' Now: Binance shifted to spot (add a free Twelve Data key in Settings for real spot candles).' : '');
+}
+function setPair(p) {
+  if (p === pairOf()) return;
+  if (p === 'XAUUSD') Object.assign(settings, { provider: settings.provider === 'spot' ? 'spot' : 'auto', spotAlign: true });
+  else Object.assign(settings, { provider: p === 'XAUUSDT' ? 'bnFut' : 'bnPaxg', spotAlign: false });
+  store.set('settings', settings);
+  basisSamples = []; lastSpotStamp = null; basis = 0;
+  renderPair();
+  toast(`Switched to ${p}. Journal trades and drawings keep the prices they were made at.`, 4000);
+  loadFeed();
+}
+
 // History is kept "raw" (perp prices for Binance, spot prices for Twelve Data).
 // Display = raw + manual offset (+ measured spot basis for Binance history).
 let raw = [], lastRaw = null, basis = 0, basisKey = null, basisSamples = [], lastSpotStamp = null;
@@ -284,6 +309,7 @@ function renderSourceBadge() {
   const aligned = feed.key !== 'spot' && settings.spotAlign && basisSamples.length;
   const badge = $('#srcBadge');
   badge.textContent = src.name + (aligned ? ` · spot-aligned ${basis >= 0 ? '+' : ''}${fmt(basis)}` : '');
+  renderPair();
   badge.title = src.note + (aligned ? `\nShifted by ${fmt(basis)} so prices match spot XAU/USD (gold-api.com, recalibrated every 20s).` : '') +
     (settings.spotHours ? '\nCandles from hours when the spot market is closed are hidden.' : '');
 }
@@ -776,7 +802,7 @@ function onPrice(px) {
   }
   lastPrice = px;
   el.textContent = fmt(px);
-  document.title = fmt(px) + ' · XAU/USD · GoldTerm';
+  document.title = fmt(px) + ' · ' + pairLabel() + ' · GoldTerm';
   const lastT = candles[candles.length - 1].time;
   let ref = candles[0];
   for (let i = candles.length - 1; i >= 0; i--) if (candles[i].time <= lastT - 86400) { ref = candles[i]; break; }
@@ -792,7 +818,7 @@ function renderLegend(b) {
   const ch = b.close - b.open, cls = sgn(ch);
   const left = barEnd(b.time) - Math.floor(Date.now() / 1000);
   const cd = !legendHover && left > 0 && left <= TF[ui.tf].sec ? `<span class="k">closes in ${left >= 3600 ? Math.floor(left / 3600) + 'h ' : ''}${pad(Math.floor(left % 3600 / 60))}:${pad(left % 60)}</span>` : '';
-  $('#legend').innerHTML = `<span class="t">XAU/USD · ${ui.tf.toUpperCase()}</span>` +
+  $('#legend').innerHTML = `<span class="t">${pairLabel()} · ${ui.tf.toUpperCase()}</span>` +
     ['O', 'H', 'L', 'C'].map((k, i) => `<span><span class="k">${k}</span> <span class="${cls}">${fmt(b[['open', 'high', 'low', 'close'][i]])}</span></span>`).join('') +
     `<span class="${cls}">${ch >= 0 ? '+' : ''}${fmt(ch)} (${(ch / b.open * 100).toFixed(2)}%)</span>${cd}`;
 }
@@ -832,7 +858,7 @@ function fireAlert(kind, text) {
   try { if ('Notification' in window && Notification.permission === 'granted') new Notification('Gold alert · ' + fmt(lastPrice), { body: text, tag: 'goldterm-' + kind, renotify: true }); } catch { /* ignore */ }
   clearInterval(titleFlash);
   let n = 0;
-  titleFlash = setInterval(() => { document.title = n++ % 2 ? '🔔 ' + text : fmt(lastPrice) + ' · XAU/USD'; if (n > 12) clearInterval(titleFlash); }, 800);
+  titleFlash = setInterval(() => { document.title = n++ % 2 ? '🔔 ' + text : fmt(lastPrice) + ' · ' + pairLabel(); if (n > 12) clearInterval(titleFlash); }, 800);
   renderMarket();
 }
 function checkAlerts(px) {
@@ -2464,9 +2490,12 @@ $('#settingsDlg').addEventListener('close', () => {
   if (prev.provider !== settings.provider || prev.tdKey !== settings.tdKey || prev.offset !== settings.offset || prev.spotHours !== settings.spotHours) loadFeed();
   else if (prev.spotAlign !== settings.spotAlign) { basisSamples = []; lastSpotStamp = null; basis = 0; rebuildDisplay(); calibrateSpot(); }
   else { runPlan(); renderAnalytics(); }
+  renderPair();
 });
 
 // ---------- boot ----------
+$('#pairSel').onchange = e => { e.target.blur(); setPair(e.target.value); };
+renderPair();
 $$('#tfs button').forEach(b => b.classList.toggle('on', b.dataset.tf === ui.tf));
 applyVisibility();
 bindPlan();
